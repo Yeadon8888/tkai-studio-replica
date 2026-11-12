@@ -142,7 +142,9 @@ def _normalize_checks(obj):
         text = str(value).strip()
         status = next((x for x in allowed if text.startswith(x)), None)
         if not status:
-            raise ValueError(f"检查项 {path} 不是规定状态")
+            # 模型写了说明而不是状态：不作废整位专家，按"看不清"记录，原文移到 notes，便于人看
+            extras.append(f"{path}: {text}")
+            return "看不清"
         if text != status:
             extras.append(f"{path}: {text}")
         return status
@@ -237,14 +239,25 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     judges, failed = [], []
     try:
         for exp in cfg["experts"]:
-            try:
-                obj = run_expert(exp, project.name, take, brief, anchor, refs_p,
-                                 video_url=video_url, frames=frames)
-            except Exception as e:
-                print(f"{take} {exp['id']} 调用失败：{type(e).__name__} {getattr(e, 'code', '')}")
-                obj = None
-                failed.append({"id": exp["id"], "kind": "call_error", "error": type(e).__name__,
-                               "status": getattr(e, "code", None)})
+            obj, last_err = None, None
+            for attempt_no in range(1, 3):  # 只对上游瞬时错误（5xx、超时、断连）重试 1 次；评审只读，不重生成视频
+                try:
+                    obj = run_expert(exp, project.name, take, brief, anchor, refs_p,
+                                     video_url=video_url, frames=frames)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    code = getattr(e, "code", None)
+                    print(f"{take} {exp['id']} 第 {attempt_no} 次调用失败：{type(e).__name__} {code or ''}")
+                    transient = (isinstance(code, int) and code >= 500) or code is None
+                    if not transient:
+                        break
+                    import time
+                    time.sleep(15)
+            if last_err is not None:
+                failed.append({"id": exp["id"], "kind": "call_error", "error": type(last_err).__name__,
+                               "status": getattr(last_err, "code", None)})
             if obj is None:
                 if not any(x["id"] == exp["id"] for x in failed):
                     failed.append({"id": exp["id"], "kind": "invalid_output"})
