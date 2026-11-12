@@ -68,17 +68,29 @@ def machine_checks(video, brief):
     return {"blocking": blocking, "info": info, "facts": facts}
 
 
-def _expert_prompt(exp, brief, anchor):
+def frame_times(n, duration):
+    """抽帧时间表：与 loop._frames 的 fps=n/dur 一致，第 k 帧在 (k-1)*dur/n 秒。给专家写时间码用。"""
+    step = duration / n
+    out = []
+    for k in range(n):
+        t = k * step
+        out.append(f"f{k + 1:02d}={int(t // 60):02d}:{t % 60:04.1f}")
+    return ", ".join(out)
+
+
+def _expert_prompt(exp, brief, anchor, frame_times_text=""):
     shared = exp.get("shared_rules", "")
     return (exp["prompt"]
             .replace("{brief}", (brief.get("summary") or brief.get("prompt", ""))[:800])
             .replace("{anchor}", anchor or "（简报未提供锚点）")
+            .replace("{frame_times}", frame_times_text or "（未提供）")
             .replace("{shared_rules}", shared.strip())
             .replace("{focus}", exp["focus"].strip()))
 
 
 def run_expert(exp, project_name, take, brief, anchor, refs, frames):
-    prompt = _expert_prompt(exp, brief, anchor)
+    ft = frame_times(len(frames), float(brief.get("duration", 10)))
+    prompt = _expert_prompt(exp, brief, anchor, ft)
     parts = [{"type": "text", "text": prompt + "\n前面是产品参考图，后面是成片抽帧（按时间顺序）。"}]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in refs]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in frames]
@@ -88,7 +100,7 @@ def run_expert(exp, project_name, take, brief, anchor, refs, frames):
     if obj is None:
         return None
     obj["judge"] = {"id": exp["id"], "name": exp["name"], "temperature": exp.get("temperature", 0.1),
-                    "frames": len(frames)}
+                    "frames": len(frames), "frame_times": ft}
     return obj
 
 

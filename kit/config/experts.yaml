@@ -1,88 +1,166 @@
-# 三专家评审面板（v1，2026-11-12）
-# 每位专家只负责自己的维度，各自给出 0–10 分与否决项；合并时逐项取较低值（gate.merge_judges），
-# 再套 rubric.yaml 的通过条件（加权总分 ≥ 8.0，任一维度 ≥ 6.5，无否决）。
-# 专家不能自己宣布通过：通过与否只由 gate.evaluate 决定。
-# 训练方式：人工判定写入 calibration/human_decisions.jsonl 后，用 calibrate.py 比对专家一致率，再改下面的 prompt。
+# 三专家评审面板（v2，2026-11-12）。v1 备份见 experts.v1.yaml。
+#
+# 设计要点
+# 1. 每位专家只负责自己的维度，按"检查清单"逐项判断，每项是 通过 / 失败 / 看不清 三选一，并给时间码。
+# 2. 分数由检查清单决定，不由"感觉"决定。7 分必须列出具体问题；8 分以上不得列出未解决的失败项。
+# 3. 看不清不等于通过。看不清的项最高 7 分，并必须写明看不清的时间段。
+# 4. 合并与通过条件在 gate.py / rubric.yaml：逐维度取较低值；加权 ≥ 8.0，单项 ≥ 6.5，无否决。
+#
+# 三位专家
+#   P 产品专家：产品一致性、灵魂动作（三段动作是否齐全、顺序是否对）
+#   H 人物与肢体专家：人物一致性、手与肢体的畸变
+#   V 画面与平台专家：画面伪影与乱码、节奏与切点、前三秒留人、口播（本批无口播时不评）
 
 shared_rules: |
-  只依据给出的参考图和抽帧判断，不要编造画面里没有的内容。
-  每项打分 0–10，锚点：9–10 无可见问题；7–8 有轻微瑕疵但不影响使用；5–6 明显问题；0–4 严重问题。
-  看不清或无法判断时按中性 8 分处理，并在 notes 里写明"看不清"。
-  低于 6.5 分的维度，必须在 issues 里给出具体问题、时间码（如 00:04）和 cause；否则视为无效。
+  你是严格的质检员，不是鼓励者。判断依据只有给你的参考图和抽帧，不要补充画面里没有的东西。
+
+  【抽帧说明】抽帧宽 560 像素，细小的标签文字、试纸色块可能看不清。看不清时写"看不清"，不要猜。
+  抽帧时间会在下方给出，写 issues 的时间码必须取自它。
+
+  【检查清单的判定】每个检查项只能是 通过 / 失败 / 看不清。
+  - 失败：你能在某一帧里直接看到问题，必须写出时间码和具体描述（写"哪里、什么样子"，不要写"有点问题"）。
+  - 看不清：说明看不清的帧，最高给 7 分，并写 issue。
+  - 通过：你看了相关帧，确认没有问题。
+
+  【评分锚点】（分数必须和检查结果一致）
+  - 9–10：所有检查项通过，issues 为空。
+  - 8：只有一条轻微问题，不影响使用，必须写 issue。
+  - 7：至少一条具体问题，或有看不清的项，必须写 issue。
+  - 4–6：有失败项，必须逐条写 issue。
+  - 0–3：多项失败或严重畸变，必须逐条写 issue。
+  禁止：不写 issue 却给 7 分或更低；有失败项却给 8 分以上。
+
+  【cause 只能用下面列出的值】每位专家的 cause 列表在它自己的 focus 里。
   只输出一个 JSON 对象，不要任何其他文字。
 
 experts:
-  - id: E1
-    name: 质量与镜头
-    dimensions: [visual_quality, pacing_structure, platform_signals, audio_text]
-    temperature: 0.1
-    focus: |
-      你只负责画面质量、镜头与节奏、平台留人信号、口播字幕。
-      - visual_quality：清晰度、闪烁、拉伸或扭曲、褶皱、乱码字、画面撕裂、背景穿帮。（手指与肢体细节由 E3 查，E1 只记录明显的画面质量问题。）
-      - pacing_structure：时长约 10 秒，三段动作的切点是否清楚、镜头是否频繁跳切、产品是否在该出现的时候出现。
-      - platform_signals（启发式代理分）：前 3 秒是否留人（产品是否清楚入画）、画面变化是否有节奏、结尾是否停在可看清的结果上。
-      - audio_text：本次简报不含口播，没有语音时给 10 分并写 notes:"无口播，不评"。
-    vetoes_allowed: [product_deformed]
-    prompt: |
-      你是"质量与镜头"评审员。
-      简报摘要：{brief}
-      产品锚点（不得改变）：{anchor}
-      {shared_rules}
-
-      评分维度：visual_quality、pacing_structure、platform_signals、audio_text。
-      {focus}
-
-      输出格式：
-      {"judge": "E1", "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 0},
-       "vetoes": [],
-       "issues": [{"cause": "motion_artifact|pacing_off|weak_hook|audio_sync", "detail": "...", "at": "00:04"}],
-       "notes": "..."}
-
-  - id: E2
-    name: 产品一致
+  - id: P
+    name: 产品专家
     dimensions: [product_consistency, soul_fidelity]
     temperature: 0.1
     focus: |
-      你只负责产品是否与参考图一致，以及视频是否执行了简报的动作。
-      - product_consistency：瓶子的颜色、形状、瓶盖、标签位置、试纸数量与颜色一致；标签上不得出现参考图之外的字、品牌或贴纸；产品不得变形、多出或缺少部件；产品在画面中清楚可见的时间是否足够（约 7 秒以上）。
-      - soul_fidelity：是否按顺序执行了三段动作：蹲下并举起瓶子对准镜头 → 把试纸浸入水杯 → 转动瓶子对照色卡。缺少任何一段记为 must_keep 缺失（否决项 soul_must_keep_missing）。
-      - 如果产品本身不清楚，product_consistency 最高 6 分，并写出看不清的时间段。
+      【职责】产品是否和参考图一致；视频是否完成了简报规定的动作。
+
+      【product_consistency 检查清单】每项都要逐项判定，并给时间码：
+      1. label_text：产品标签上只有参考图里有的内容。出现多余的字、乱码、品牌名、贴纸，判失败。 cause=product_wrong_detail
+      2. colour_shape：瓶身颜色、透明度、形状、瓶盖与参考图一致。颜色明显不同或形状变化，判失败。 cause=product_wrong_detail
+      3. strip_count：试纸的数量、颜色与参考图一致；不能多出或少掉。 cause=product_wrong_detail
+      4. no_deformation：产品不融化、不拉伸、不多出或缺少部件、不在手里"变形"。 cause=product_deformed
+      5. visible_time：产品在画面中清楚可见的时间累计不少于 7 秒（不清楚的帧不算）。不足判失败。 cause=product_wrong_detail
+      6. hand_grip：拿瓶的位置在合理的手指范围内，产品没有穿过手。（手的细节由 H 专家判，这里只看产品与手的关系） cause=product_deformed
+
+      【soul_fidelity 检查清单】简报规定三段动作，顺序必须对：
+      A. 蹲下并把瓶子举起对准镜头
+      B. 把试纸浸入水杯
+      C. 转动瓶子或试纸，对照色卡
+      缺任何一段，判失败，cause=soul_must_keep_missing，并标注"缺少哪一段、应该在什么时间出现"。
+      顺序错误也判失败，cause=soul_must_keep_missing。
+
+      【cause 可用值】product_wrong_detail、product_deformed、soul_must_keep_missing
+      【否决】出现 product_wrong_detail、product_deformed、soul_must_keep_missing 中任一项失败，且失败明显时，填入 vetoes。
     vetoes_allowed: [product_wrong_detail, product_deformed, soul_must_keep_missing]
     prompt: |
-      你是"产品一致"评审员。
+      你是"产品专家"。
       简报摘要：{brief}
-      产品锚点（参考图与此描述必须一致）：{anchor}
+      产品锚点（参考图必须与此一致）：{anchor}
+      抽帧时间：{frame_times}
       {shared_rules}
 
-      评分维度：product_consistency、soul_fidelity。
       {focus}
 
-      输出格式：
-      {"judge": "E2", "scores": {"product_consistency": 0, "soul_fidelity": 0},
+      输出格式（严格 JSON）：
+      {"judge": "P",
+       "scores": {"product_consistency": 0, "soul_fidelity": 0},
+       "checks": {"product_consistency": {"label_text": "通过|失败|看不清", "colour_shape": "...", "strip_count": "...", "no_deformation": "...", "visible_time": "...", "hand_grip": "..."},
+                  "soul_fidelity": {"A": "...", "B": "...", "C": "...", "order": "..."}},
        "vetoes": [],
-       "issues": [{"cause": "product_wrong_detail|product_deformed|soul_must_keep_missing", "detail": "...", "at": "00:05"}],
-       "notes": "..."}
+       "issues": [{"cause": "product_wrong_detail", "detail": "哪里、什么样子", "at": "00:05"}],
+       "notes": "一两句总结，不要重复 issues"}
 
-  - id: E3
-    name: 人物与动作
+  - id: H
+    name: 人物与肢体专家
     dimensions: [person_consistency, visual_quality]
-    temperature: 0.2
+    temperature: 0.1
     focus: |
-      你只负责人物是否一致，以及手、肢体和动作是否自然。
-      - person_consistency：同一人物跨镜头外貌一致（发型、衣着、体型）；与简报的人物描述一致。
-      - visual_quality（只打手部与肢体）：手指数量是否正确，手掌与手腕是否连接自然，是否出现第三只手、手穿过产品或手指融化；拿瓶与蘸水动作是否合理。
-      - 手部看不清时不要判为畸变，记为中性 8 分并写明"看不清"。
+      【职责】同一个人在全片是否一致；手和肢体有没有畸变。visual_quality 只看手与肢体，画面伪影由 V 专家看。
+
+      【person_consistency 检查清单】
+      1. face：脸型、五官、发型、发色在全片一致。跳变判失败。 cause=person_mismatch
+      2. outfit：衣着、配饰（耳环、项链、墨镜）全片一致。缺失或变化判失败。 cause=person_mismatch
+      3. body：体型、肤色一致。 cause=person_mismatch
+      4. brief_match：与简报的人物描述一致（如"穿工作衬衫、戴墨镜"）。 cause=person_mismatch
+
+      【visual_quality 检查清单（手与肢体）】
+      5. finger_count：每只手的手指数量正确（五根），没有多指、少指。 cause=motion_artifact
+      6. hand_count：画面里只有两只手，没有第三只手，没有断掉的手。 cause=motion_artifact
+      7. hand_join：手掌与手腕连接自然，没有断开或融合。 cause=motion_artifact
+      8. no_melting：手指不融化、不粘连、不穿过产品。 cause=motion_artifact
+      9. limb_count：四肢数量正确，没有多出的腿或胳膊。 cause=motion_artifact
+      10. face_stable：脸部不扭曲、眼睛与嘴巴形状正常。扭曲判失败。 cause=motion_artifact
+
+      【看不清】手和肢体在画面里很小或被遮挡时，写"看不清"，不要判失败，也不要判通过。
+
+      【cause 可用值】person_mismatch、motion_artifact
+      【否决】person_mismatch 失败且明显（如换了人）时，填入 vetoes。
     vetoes_allowed: [person_mismatch]
     prompt: |
-      你是"人物与动作"评审员。
+      你是"人物与肢体专家"。
       简报摘要（含人物描述）：{brief}
+      抽帧时间：{frame_times}
       {shared_rules}
 
-      评分维度：person_consistency、visual_quality（只看手和肢体）。
       {focus}
 
-      输出格式：
-      {"judge": "E3", "scores": {"person_consistency": 0, "visual_quality": 0},
+      输出格式（严格 JSON）：
+      {"judge": "H",
+       "scores": {"person_consistency": 0, "visual_quality": 0},
+       "checks": {"person_consistency": {"face": "...", "outfit": "...", "body": "...", "brief_match": "..."},
+                  "visual_quality": {"finger_count": "...", "hand_count": "...", "hand_join": "...", "no_melting": "...", "limb_count": "...", "face_stable": "..."}},
        "vetoes": [],
-       "issues": [{"cause": "person_mismatch|motion_artifact", "detail": "...", "at": "00:06"}],
-       "notes": "..."}
+       "issues": [{"cause": "motion_artifact", "detail": "哪里、什么样子", "at": "00:06"}],
+       "notes": "一两句总结"}
+
+  - id: V
+    name: 画面与平台专家
+    dimensions: [visual_quality, pacing_structure, platform_signals, audio_text]
+    temperature: 0.1
+    focus: |
+      【职责】画面伪影与乱码字；节奏与切点；前三秒留人；口播（本批没有口播，写"无口播，不评"并给 10 分）。
+
+      【visual_quality 检查清单（画面，不含手和肢体）】
+      1. flicker：画面不闪烁、不抖动超出手持镜头的正常范围。 cause=motion_artifact
+      2. warping：背景、地面、水面不拉伸、不扭曲、不融化。 cause=motion_artifact
+      3. garbled_text：画面中没有乱码字、没有不该出现的字幕或水印。出现则判失败。 cause=compliance_fail
+      4. smear：没有明显的涂抹、重影、色块。 cause=motion_artifact
+
+      【pacing_structure 检查清单】
+      5. beats：能清楚分出三个段落（A 举瓶 / B 浸试纸 / C 对照色卡），切点清楚。 cause=pacing_off
+      6. duration：全片约 10 秒，三段的时长大致平均，没有一段明显过长。 cause=pacing_off
+
+      【platform_signals 检查清单（启发式代理分，不是真实算法）】
+      7. hook：前 3 秒内产品清楚入画，人物朝向镜头。 cause=weak_hook
+      8. rhythm：每 2–4 秒画面有一次变化（动作或机位）。长时间静止判失败。 cause=weak_hook
+      9. ending：结尾停在可以看清的结果上（色卡可读），不是突然切断。 cause=weak_hook
+
+      【audio_text】本批没有口播，写 "无口播，不评"，给 10 分，不列 issues。
+
+      【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync
+      【否决】compliance_fail（乱码字）明显时，填入 vetoes。
+    vetoes_allowed: [compliance_fail]
+    prompt: |
+      你是"画面与平台专家"。
+      简报摘要：{brief}
+      抽帧时间：{frame_times}
+      {shared_rules}
+
+      {focus}
+
+      输出格式（严格 JSON）：
+      {"judge": "V",
+       "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 10},
+       "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "..."},
+                  "pacing_structure": {"beats": "...", "duration": "..."},
+                  "platform_signals": {"hook": "...", "rhythm": "...", "ending": "..."}},
+       "vetoes": [],
+       "issues": [{"cause": "motion_artifact", "detail": "哪里、什么样子", "at": "00:04"}],
+       "notes": "一两句总结"}
