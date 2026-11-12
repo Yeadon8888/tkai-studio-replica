@@ -92,8 +92,26 @@ def _response_errors(obj, tier):
     return errors
 
 
+def refresh_play_urls(candidate, batch):
+    """播放链接过期时，用分享链接向 TikHub 重新取一次（1 次请求），并写回 candidates.json。"""
+    import intake
+    url = candidate.get("url")
+    if not url:
+        return []
+    client = tt_research.Client(tt_research.load_key(), batch, budget_calls=1)
+    fresh = intake.fetch_url_candidate(url, client)
+    urls = fresh.get("play_urls") or []
+    path = Path(batch) / "candidates.json"
+    cands = json.loads(path.read_text(encoding="utf-8"))
+    for c in cands:
+        if c.get("aweme_id") == candidate.get("aweme_id"):
+            c["play_urls"] = urls
+    path.write_text(json.dumps(cands, ensure_ascii=False, indent=2), encoding="utf-8")
+    return urls
+
+
 def build(batch, candidate_id, product_id, tier, run_dir, model_call=None, reachable=None,
-          upload=None, delete=None, media_log=None, overwrite=False):
+          upload=None, delete=None, media_log=None, overwrite=False, refresh=None):
     """构建一份对标文件。可注入模型、可访问性检查和媒体上传函数，便于无付费测试。"""
     batch, run_dir = Path(batch), Path(run_dir)
     out_path = run_dir / "benchmarks" / f"{candidate_id}.json"
@@ -125,7 +143,13 @@ def build(batch, candidate_id, product_id, tier, run_dir, model_call=None, reach
         else:
             video_url = next((url for url in candidate.get("play_urls") or [] if reachable(url)), "")
             if not video_url:
-                return {"ok": False, "errors": [f"候选 {candidate_id} 的 play_urls 都不可访问"]}
+                # 播放链接会过期：用分享链接刷新一次，仍不可访问才放弃
+                refresh = refresh or refresh_play_urls
+                fresh = refresh(candidate, batch) or []
+                video_url = next((url for url in fresh if reachable(url)), "")
+                status["play_urls_refreshed"] = True
+            if not video_url:
+                return {"ok": False, "errors": [f"候选 {candidate_id} 的 play_urls 都不可访问（已刷新一次）"]}
         text = model_call(_model_parts(candidate, breakdown, tier, video_url), project=run_dir.name,
                           ref=candidate_id, max_tokens=4000, role="breakdown")
         obj = tt_research.parse_json_obj(text)

@@ -72,6 +72,24 @@ class BenchmarkBuilderTest(unittest.TestCase):
         self.assertEqual(bench["product_anchor"], "exact blue test strip bottle")
         self.assertEqual(bench["tier"], "H")
 
+    def test_expired_play_urls_are_refreshed_once(self):
+        import benchmark_builder as bb
+        seen, refreshed = {}, []
+
+        def model(parts, **kwargs):
+            seen["url"] = parts[1]["video_url"]
+            return self.h_response()
+
+        def refresh(candidate, batch):
+            refreshed.append(candidate["candidate_id"])
+            return ["fresh"]
+
+        result = bb.build(self.make_batch(), "M001", "p", "H", self.root / "run2", model_call=model,
+                          reachable=lambda url: url == "fresh", refresh=refresh)
+        self.assertTrue(result["ok"])
+        self.assertEqual(refreshed, ["M001"])
+        self.assertEqual(seen["url"], "fresh")
+
     def test_invalid_model_fields_do_not_write_file(self):
         import benchmark_builder as bb
         run = self.root / "run"
