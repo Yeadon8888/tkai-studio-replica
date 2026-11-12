@@ -9,6 +9,14 @@
 - TokensFactory 视频：按账本 `estimate_cny` 计入品预算（单价见 `.env` 的 `VIDEO_PRICE_CNY_PER_SECOND`）。
 - 账本里 `estimate_cny` 为 `null` 的行是未知金额，单独报告，不要当作 0。
 
+### 历史账本回填与费用口径
+
+- `ledger_backfill.py` 只处理视频模型的 `submitted` 行，金额按该行 `units × kit/settings.py` 读取到的视频单价计算；终态行、文本模型和 TikHub 行不回填。
+- 默认只 dry-run。`--apply` 写入前会在原文件旁创建带时间戳的备份，并保持未回填行原样。
+- 视频费用只合计视频 `submitted` 行的已知 `estimate_cny`，视频秒数也只合计这些提交行；同一 `ref` 多次提交会全部计费，并单列超出首次的重复提交次数。
+- 文本模型和 TikHub 当前只报告调用次数；文本模型另报失败次数及 prompt / completion token。价格未配置时不换算金额，也不把未知金额当作 0。
+- 看板的“每条成品单价”仍按成片记录的全部视频花费除以通过条数；顶部“视频（元）”来自统一账本，两者口径分别用于成片摊销和账本核对。
+
 ## 品目录
 
 ```

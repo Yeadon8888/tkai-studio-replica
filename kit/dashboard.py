@@ -181,12 +181,17 @@ function takeBody(t, rule, compact){
   const issues = (t.issues || []).slice(0, compact ? 3 : 8).map(i => `<li>${i.at ? `<span class="muted">${esc(i.at)}</span> ` : ''}${esc(i.detail)}</li>`).join('');
   const more = (t.issues || []).length > (compact ? 3 : 8) ? `<p class="muted">另有 ${(t.issues.length - (compact ? 3 : 8))} 条问题</p>` : '';
   const cost = `${fmt(t.cost_cny)} 元${t.cost_estimated ? '（估算）' : ''}${t.submits > 1 ? ` · 提交 ${t.submits} 次` : ''}`;
+  const humanNames = {accept:'接受',iterate:'迭代',redo:'重做',hold:'暂缓',abandon:'放弃',release:'放行'};
+  const human = t.human
+    ? `<p><span class="tag">人工：${esc(humanNames[t.human.decision] || t.human.decision)}</span> ${esc(t.human.reason || '')} <span class="muted">${esc(t.human.decided_at || '')}</span></p>`
+    : '<p class="muted">未人工判定</p>';
   const video = t.video
     ? `<video controls preload="metadata" playsinline class="tk" src="${esc(t.video)}"></video>`
     : '<div class="tk none">没有成片文件</div>';
   return `<div class="take">${video}
     <div class="tinfo"><div><span class="tag g-${esc(t.grade)}">${esc(t.grade_text || '')}</span> <b>${esc(t.id || '')}</b></div>
       <p class="muted">第 ${show(t.attempt)} 轮 · 加权 ${show(t.weighted)} · ${cost}</p>
+      ${human}
       ${vet}${issues ? `<ul class="iss">${issues}</ul>${more}` : (t.grade === 'unreviewed' ? '<p class="muted">还没有评审结果。</p>' : (t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ''))}
       ${compact ? '' : (dims ? `<div class="grid dimgrid">${dims}</div>` : '')}
       ${t.video ? `<p><a href="${esc(t.video)}" target="_blank" rel="noopener">在新窗口打开 ↗</a></p>` : ''}</div></div>`;
@@ -229,10 +234,17 @@ function renderProduction(){
   const st = P.stats || {};
   const sl = statLine(st) || {};
   const GT = P.grade_text || {};
+  const humanRate = st.human_agreement_rate == null ? '样本不足' : `${st.human_agreed}/${st.human_compared}（${Math.round(st.human_agreement_rate * 100)}%）`;
+  const textTokens = (st.prompt_tokens || 0) + (st.completion_tokens || 0);
   const kpi = `<div class="kv">
     <div>成片总数<b>${show(st.takes)}</b></div><div>通过<b>${show(st.good)}</b></div>
     <div>废片率<b>${esc(sl.rate || '未提供')}</b></div>
-    <div>总花费${st.cost_estimated ? '（含估算）' : ''}<b>${show(st.cost_cny)} 元</b></div>
+    <div>人工判定数<b>${show(st.human_count)}</b></div>
+    <div>专家与人工一致率<b>${esc(humanRate)}</b></div>
+    <div>视频（元）<b>${show(st.video_cny)} 元</b><span class="muted">${show(st.video_seconds)} 秒</span></div>
+    <div>文本模型（次数 / token，价格未配置）<b>${show(st.text_calls)} 次 / ${fmt(textTokens)}</b><span class="muted">prompt ${fmt(st.prompt_tokens)} · completion ${fmt(st.completion_tokens)} · 失败 ${fmt(st.text_failures)}</span></div>
+    <div>TikHub 次数<b>${show(st.tikhub_calls)}</b></div>
+    <div>重复提交次数<b>${show(st.duplicate_submit_count)}</b></div>
     <div>每条成品单价<b>${esc(sl.per || '未提供')}</b></div></div>`;
   const head = `<p class="muted">通过条件：加权总分 ≥ ${show(rule.weighted_min)}；每个维度 ≥ ${show(rule.dimension_floor)}；没有否决项。废片率 = 未通过 ÷ 已评审。成品单价 = 这一组的全部花费 ÷ 通过条数。</p>`;
   const f = state.gfilter || '全部';
