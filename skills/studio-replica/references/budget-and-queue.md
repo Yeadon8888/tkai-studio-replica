@@ -32,3 +32,9 @@ studio/products/<品id>/
 - 本品已花金额 / 上限（`products.py status --product <品>`）。
 - 未知金额行数。
 - 当前阶段与下一步。
+
+## 调用上限（用户约定，代码写死，`kit/limits.py`）
+
+- TikHub：单次查询（一次 search/hashtag/account 运行）最多 **100 次**请求。`tt_research.Client` 已自动取 min(参数, 100)。
+- Gemini（TokensFactory 文本模型）：单个运行最多 **100 次**，含拆解、验证、评审。`loop.gemini` 调用前按账本计数，超过即停止。
+- 预算（视频）：每品默认 5 元，超出先沟通。

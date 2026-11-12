@@ -92,7 +92,8 @@ class Client:
         self.key = key
         self.out = Path(out_dir)
         (self.out / "raw").mkdir(parents=True, exist_ok=True)
-        self.budget = budget_calls
+        import limits  # 用户约定：单次查询不超过 100 次
+        self.budget = min(int(budget_calls), limits.TIKHUB_MAX_CALLS)
         self.used = 0
         self.dry_run = dry_run
         self.log = self.out / "calls.jsonl"

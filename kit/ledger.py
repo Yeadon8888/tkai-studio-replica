@@ -57,3 +57,15 @@ def summary(project=None):
         if str(r["status"]) in ("200", "ok"):
             s["ok"] += 1
     return out
+
+
+def count_calls(project, endpoint):
+    """某运行、某端点已记账的请求数（含失败），用于调用上限检查。"""
+    if not LEDGER_FILE.exists():
+        return 0
+    n = 0
+    for line in LEDGER_FILE.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("project") == project and r.get("endpoint") == endpoint and r.get("units"):
+            n += 1
+    return n

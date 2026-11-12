@@ -208,6 +208,31 @@ class ProductBudget(unittest.TestCase):
             self.assertEqual(products.limit_cny(m), 13.0)
 
 
+class CallLimits(unittest.TestCase):
+    def test_tikhub_budget_is_clamped_to_100(self):
+        import tempfile
+        import tt_research as tt
+        with tempfile.TemporaryDirectory() as tmp:
+            c = tt.Client("k", tmp, budget_calls=500)
+            self.assertEqual(c.budget, 100)
+
+    def test_gemini_count_reads_ledger_per_project(self):
+        import json as _j
+        import tempfile
+        import ledger
+        with tempfile.TemporaryDirectory() as tmp:
+            old = ledger.LEDGER_FILE
+            ledger.LEDGER_FILE = Path(tmp) / "costs.jsonl"
+            try:
+                rows = [{"project": "r1", "endpoint": "gemini-3.8-flash", "units": 1},
+                        {"project": "r2", "endpoint": "gemini-3.8-flash", "units": 1},
+                        {"project": "r1", "endpoint": "gemini-3.8-flash", "units": 1}]
+                ledger.LEDGER_FILE.write_text("\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+                self.assertEqual(ledger.count_calls("r1", "gemini-3.8-flash"), 2)
+            finally:
+                ledger.LEDGER_FILE = old
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

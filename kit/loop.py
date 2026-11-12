@@ -60,6 +60,10 @@ BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它�
  "risk": "AI 复刻风险一句话"}"""
 
 def gemini(parts, project, ref, max_tokens=1200, temperature=0.1):
+    import limits
+    used = ledger.count_calls(project=project, endpoint=GEMINI)
+    if used >= limits.GEMINI_MAX_CALLS:
+        raise SystemExit(f"Gemini 调用已达上限 {limits.GEMINI_MAX_CALLS}（运行 {project}），停止。")
     base, key = tt.load_tf_env()
     body = {"model": GEMINI, "messages": [{"role": "user", "content": parts}],
             "max_tokens": max_tokens, "temperature": temperature}
