@@ -29,13 +29,25 @@ python3 intake.py add-file  --product <品id> --files <路径,路径> --relation
 python3 intake.py breakdown --product <品id>
 python3 intake.py tiers     --product <品id>
 python3 intake.py plan      --product <品id> --n 10 --all
+python3 intake.py confirm-tier --product <品id> --id M001 --tier H --note "<人工复核理由>"
+python3 intake.py build     --product <品id> --run <运行目录>
 ```
 
 - `--relation`：`same` 同款或同类（可到 H）；`similar` 同类不同形态（最高 L）；`different` 不同品类，只借展示方式（最高 L）。
 - 链接：用 TikHub 取一次视频信息（1 次请求），模型直接看视频拆解。
 - 本地文件：不上传到任何公开地址，只在本机抽帧后交给文本模型；听不到声音，记录里会注明。
 - `plan` 三选一：`--pick M001,M002`（指定对标）、`--tiers H,M`（指定档位）、`--all`（全部）。只出计划和预计金额，不花钱。结果写到 `products/<品>/plan.json`。
+- H 档计划项带 `needs_confirm: true`。`confirm-tier` 把人工档位与理由写入调研批次的 `tier_overrides.json`；也可把误判的 H 改为 M/L/X。
+- `build` 按 `plan.json` 逐条生成 `<运行目录>/benchmarks/<候选id>.json`。每条复刻项调用一次拆解模型；未确认的 H 档直接跳过。已有对标文件默认不重复调用。
 - 手动对标存为调研批次 `manual-<品id>`，看板可用 `loop.py board --research <该批次>` 显示。
+
+也可对任意调研批次单独构建一条：
+
+```bash
+python3 benchmark_builder.py --batch <调研批次> --id M001 --product <品id> --tier M --run <运行目录>
+```
+
+链接候选使用第一个可访问的 `play_urls`；本地候选临时上传，调用后立即删除。生成结果必须通过 `fission.check_inputs` 才会写入。
 
 ## 调研（`tt_research.py`）
 

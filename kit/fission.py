@@ -62,6 +62,10 @@ def check_inputs(bench, dirs, tier):
     if tier not in VARY_ALLOWED:
         errs.append(f"未知档位 {tier}")
         return errs
+    if not isinstance(bench.get("must_keep"), list) or not bench.get("must_keep"):
+        errs.append("缺少按时间顺序的必须保留项 must_keep")
+    if not isinstance(bench.get("prompt_fixed"), str) or not bench.get("prompt_fixed", "").strip():
+        errs.append("缺少给视频模型的英文提示词 prompt_fixed")
     for k in FIXED_REQUIRED[tier]:
         if not bench.get("fixed", {}).get(k) and not bench.get(k):
             errs.append(f"{tier} 档缺少固定项：{k}")
