@@ -119,7 +119,7 @@ def breakdown_file(cand, pid, n=12):
                                          "-of", "default=nw=1:nk=1", str(video)]).decode().strip())
     parts = [{"type": "text", "text": loop.BREAKDOWN_PROMPT + FRAMES_NOTE + review_panel.frame_times(len(frames), dur)}]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in frames]
-    text = loop.gemini(parts, project=batch_dir(pid).name, ref=cand["candidate_id"], max_tokens=1500, role="breakdown")
+    text = loop.gemini(parts, project=batch_dir(pid).name, ref=cand["candidate_id"], max_tokens=4000, role="breakdown")
     obj = loop.tt.parse_json_obj(text)
     if obj is None:
         return None

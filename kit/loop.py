@@ -112,7 +112,7 @@ def cmd_breakdown(a):
             continue
         text = gemini([{"type": "text", "text": BREAKDOWN_PROMPT},
                        {"type": "video_url", "video_url": url}],
-                      project=batch.name, ref=cid, max_tokens=1500, role="breakdown")
+                      project=batch.name, ref=cid, max_tokens=4000, role="breakdown")
         obj = tt.parse_json_obj(text)
         if obj is None:
             print(f"{cid} 模型输出无法解析，已记账，原文前 200 字：{text[:200]}")
