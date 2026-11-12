@@ -1,0 +1,17 @@
+# 媒体与大文件：不进仓库
+*.mp4
+*.mov
+*.png
+*.jpg
+takes/
+projects/
+research/
+# 账本与审计产物含调用记录，只留在本地
+ledger/
+audit/
+# 密钥与缓存
+.env
+*.env
+credentials*
+__pycache__/
+.DS_Store

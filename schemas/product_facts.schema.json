@@ -1,0 +1,62 @@
+{
+  "title": "ProductFacts",
+  "description": "产品事实：只记录实物能被照片核实的内容。是 Studio 与 Flowfield 中台共用的唯一事实来源。客户要求、营销说法、生成规则都不放在这里。",
+  "type": "object",
+  "required": ["product_id", "version", "source", "skus", "not_render"],
+  "properties": {
+    "product_id": {"type": "string"},
+    "version": {"type": "integer"},
+    "source": {
+      "type": "object",
+      "required": ["photos", "client_table", "reshoot_at"],
+      "properties": {
+        "photos": {"type": "string", "description": "实拍照片来源（目录或编号范围）"},
+        "client_table": {"type": "string", "description": "客户型号表，只作辅助，冲突时以实拍为准"},
+        "reshoot_at": {"type": ["string", "null"]},
+        "ai_cleaned_used_as_evidence": {"type": "boolean", "description": "必须为 false；AI 整理图只参考，不作依据"}
+      }
+    },
+    "conventions": {"type": "object", "description": "左右、扣数、尺寸、颜色的记录约定"},
+    "skus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sku_id", "color", "facts"],
+        "properties": {
+          "sku_id": {"type": "string"},
+          "color": {"type": "string"},
+          "color_confidence": {"enum": ["certain", "uncertain", "unknown"]},
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["area", "item", "value", "confidence", "evidence"],
+              "properties": {
+                "area": {"enum": ["structure", "material", "cup", "strap", "closure", "connection", "decoration", "text", "bottom", "bottom_garment", "light", "other"]},
+                "item": {"type": "string"},
+                "value": {"type": "string"},
+                "confidence": {"enum": ["certain", "uncertain", "unknown"], "description": "certain=照片清楚；uncertain=能判断但有疑点；unknown=没拍到或看不清"},
+                "evidence": {"type": "array", "items": {"type": "string"}, "description": "依据的照片编号"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "not_render": {"type": "array", "items": {"type": "string"}, "description": "不进成图的东西：标签、污渍、临时纸标、他人品牌等"},
+    "open_conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "owner", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "description": {"type": "string"},
+          "owner": {"type": "string", "enum": ["client", "operator", "studio"]},
+          "status": {"enum": ["open", "resolved"]},
+          "resolution": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

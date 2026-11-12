@@ -1,0 +1,43 @@
+{
+  "id": "X-sample-pool-strips",
+  "enemy": "凭眼睛估计池水是否安全，或者等水变绿才想起来查",
+  "symptom": "池水看着还行，但不知道到底安不安全，怕孩子下水",
+  "mechanism": "试纸颜色直接对应水里的氯和 pH，一蘸就知道，不用猜",
+  "macro": false,
+  "macro_reason": "机制是试纸颜色变化，肉眼可见，纯物理实拍，不走微观 3D",
+  "hands": "single",
+  "duration": 10,
+  "reveal_product_at_s": 3.5,
+  "shots": [
+    {
+      "start": 0,
+      "end": 3.5,
+      "scene_zh": "泳池边，清晨阳光",
+      "action_zh": "女人蹲在池边盯着水面，皱眉，用手比划'看着还行吧'",
+      "line": "Looks fine... right? I always just guess—",
+      "tone": "疲惫但真诚",
+      "image_prompt": "a small clear vial of water test strips with a plain white label and NO text, woman crouching at a pool edge, squinting at the water",
+      "video_prompt": "Vertical 9:16 handheld phone UGC, woman crouches at the pool edge looking at the water with a worried frown. a small clear vial of water test strips with a plain white label and NO text, not shown yet. The character always keeps one hand holding the camera. Slight camera shake following the character's movement."
+    },
+    {
+      "start": 3.5,
+      "end": 7,
+      "scene_zh": "池边台面",
+      "action_zh": "女人把试纸瓶靠近镜头，单手拿着，另一只手拧开瓶盖",
+      "line": "Turns out you can just check it—",
+      "tone": "笃定",
+      "image_prompt": "a small clear vial of water test strips with a plain white label and NO text, held close to the camera in one hand",
+      "video_prompt": "Handheld phone UGC, the character holds the vial close to the camera with one hand, the whole vial clearly visible. a small clear vial of water test strips with a plain white label and NO text. The character always keeps one hand holding the camera. Slight camera shake following the character's movement."
+    },
+    {
+      "start": 7,
+      "end": 10,
+      "scene_zh": "池边",
+      "action_zh": "试纸蘸水，几秒后对照比色卡",
+      "line": "Thirty seconds—and you know.",
+      "tone": "激动分享",
+      "image_prompt": "a small clear vial of water test strips with a plain white label and NO text, a test strip dipped in pool water, colour compared to the chart",
+      "video_prompt": "Handheld phone UGC, the character dips one strip into pool water with the free hand, then holds the strip up to the camera for the colour check. a small clear vial of water test strips with a plain white label and NO text. The character always keeps one hand holding the camera. Slight camera shake following the character's movement."
+    }
+  ]
+}

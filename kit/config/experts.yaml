@@ -1,0 +1,88 @@
+# 三专家评审面板（v1，2026-11-12）
+# 每位专家只负责自己的维度，各自给出 0–10 分与否决项；合并时逐项取较低值（gate.merge_judges），
+# 再套 rubric.yaml 的通过条件（加权总分 ≥ 8.0，任一维度 ≥ 6.5，无否决）。
+# 专家不能自己宣布通过：通过与否只由 gate.evaluate 决定。
+# 训练方式：人工判定写入 calibration/human_decisions.jsonl 后，用 calibrate.py 比对专家一致率，再改下面的 prompt。
+
+shared_rules: |
+  只依据给出的参考图和抽帧判断，不要编造画面里没有的内容。
+  每项打分 0–10，锚点：9–10 无可见问题；7–8 有轻微瑕疵但不影响使用；5–6 明显问题；0–4 严重问题。
+  看不清或无法判断时按中性 8 分处理，并在 notes 里写明"看不清"。
+  低于 6.5 分的维度，必须在 issues 里给出具体问题、时间码（如 00:04）和 cause；否则视为无效。
+  只输出一个 JSON 对象，不要任何其他文字。
+
+experts:
+  - id: E1
+    name: 质量与镜头
+    dimensions: [visual_quality, pacing_structure, platform_signals, audio_text]
+    temperature: 0.1
+    focus: |
+      你只负责画面质量、镜头与节奏、平台留人信号、口播字幕。
+      - visual_quality：清晰度、闪烁、拉伸或扭曲、褶皱、乱码字、画面撕裂、背景穿帮。（手指与肢体细节由 E3 查，E1 只记录明显的画面质量问题。）
+      - pacing_structure：时长约 10 秒，三段动作的切点是否清楚、镜头是否频繁跳切、产品是否在该出现的时候出现。
+      - platform_signals（启发式代理分）：前 3 秒是否留人（产品是否清楚入画）、画面变化是否有节奏、结尾是否停在可看清的结果上。
+      - audio_text：本次简报不含口播，没有语音时给 10 分并写 notes:"无口播，不评"。
+    vetoes_allowed: [product_deformed]
+    prompt: |
+      你是"质量与镜头"评审员。
+      简报摘要：{brief}
+      产品锚点（不得改变）：{anchor}
+      {shared_rules}
+
+      评分维度：visual_quality、pacing_structure、platform_signals、audio_text。
+      {focus}
+
+      输出格式：
+      {"judge": "E1", "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 0},
+       "vetoes": [],
+       "issues": [{"cause": "motion_artifact|pacing_off|weak_hook|audio_sync", "detail": "...", "at": "00:04"}],
+       "notes": "..."}
+
+  - id: E2
+    name: 产品一致
+    dimensions: [product_consistency, soul_fidelity]
+    temperature: 0.1
+    focus: |
+      你只负责产品是否与参考图一致，以及视频是否执行了简报的动作。
+      - product_consistency：瓶子的颜色、形状、瓶盖、标签位置、试纸数量与颜色一致；标签上不得出现参考图之外的字、品牌或贴纸；产品不得变形、多出或缺少部件；产品在画面中清楚可见的时间是否足够（约 7 秒以上）。
+      - soul_fidelity：是否按顺序执行了三段动作：蹲下并举起瓶子对准镜头 → 把试纸浸入水杯 → 转动瓶子对照色卡。缺少任何一段记为 must_keep 缺失（否决项 soul_must_keep_missing）。
+      - 如果产品本身不清楚，product_consistency 最高 6 分，并写出看不清的时间段。
+    vetoes_allowed: [product_wrong_detail, product_deformed, soul_must_keep_missing]
+    prompt: |
+      你是"产品一致"评审员。
+      简报摘要：{brief}
+      产品锚点（参考图与此描述必须一致）：{anchor}
+      {shared_rules}
+
+      评分维度：product_consistency、soul_fidelity。
+      {focus}
+
+      输出格式：
+      {"judge": "E2", "scores": {"product_consistency": 0, "soul_fidelity": 0},
+       "vetoes": [],
+       "issues": [{"cause": "product_wrong_detail|product_deformed|soul_must_keep_missing", "detail": "...", "at": "00:05"}],
+       "notes": "..."}
+
+  - id: E3
+    name: 人物与动作
+    dimensions: [person_consistency, visual_quality]
+    temperature: 0.2
+    focus: |
+      你只负责人物是否一致，以及手、肢体和动作是否自然。
+      - person_consistency：同一人物跨镜头外貌一致（发型、衣着、体型）；与简报的人物描述一致。
+      - visual_quality（只打手部与肢体）：手指数量是否正确，手掌与手腕是否连接自然，是否出现第三只手、手穿过产品或手指融化；拿瓶与蘸水动作是否合理。
+      - 手部看不清时不要判为畸变，记为中性 8 分并写明"看不清"。
+    vetoes_allowed: [person_mismatch]
+    prompt: |
+      你是"人物与动作"评审员。
+      简报摘要（含人物描述）：{brief}
+      {shared_rules}
+
+      评分维度：person_consistency、visual_quality（只看手和肢体）。
+      {focus}
+
+      输出格式：
+      {"judge": "E3", "scores": {"person_consistency": 0, "visual_quality": 0},
+       "vetoes": [],
+       "issues": [{"cause": "person_mismatch|motion_artifact", "detail": "...", "at": "00:06"}],
+       "notes": "..."}

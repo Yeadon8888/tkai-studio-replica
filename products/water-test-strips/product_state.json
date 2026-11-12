@@ -1,0 +1,25 @@
+{
+  "product_id": "water-test-strips",
+  "name": "泳池/水族水质试纸",
+  "anchor": "a small clear vial of water test strips with a plain white label and NO text",
+  "budget_cny": 5.0,
+  "approved_budget_cny": 13.0,
+  "budget_note": "用户确认：10 条批次，约 13 元（10 条 × 10 秒 × 0.13）",
+  "selected_benchmarks": [
+    {
+      "id": "C001",
+      "batch": "20261111-loop-test-A",
+      "selected_at": "2026-11-12T00:56:56+00:00"
+    },
+    {
+      "id": "C002",
+      "batch": "20261111-loop-test-A",
+      "selected_at": "2026-11-12T00:56:56+00:00"
+    }
+  ],
+  "runs": [
+    "20261111-loop-water-strips",
+    "20261112-fission-H-test"
+  ],
+  "created": "2026-11-12T00:56:44+00:00"
+}

@@ -1,0 +1,15 @@
+{
+  "title": "LedgerEntry",
+  "type": "object",
+  "required": ["time", "provider", "endpoint", "status"],
+  "properties": {
+    "time": {"type": "string"},
+    "provider": {"type": "string", "enum": ["tikhub", "tokensfactory"]},
+    "endpoint": {"type": "string"},
+    "status": {"type": "string"},
+    "project": {"type": "string"},
+    "ref": {"type": "string"},
+    "units": {"type": ["integer", "null"]},
+    "usage": {"type": "object"}
+  }
+}

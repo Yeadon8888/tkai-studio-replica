@@ -1,0 +1,33 @@
+{
+  "product_id": "_example",
+  "version": 1,
+  "source": {
+    "photos": "示例：实拍照片编号 120841、121830",
+    "client_table": "示例：客户型号表（仅辅助）",
+    "reshoot_at": null,
+    "ai_cleaned_used_as_evidence": false
+  },
+  "conventions": {
+    "left_right": "产品平铺、肩带朝上时，看图人的左右",
+    "back_closure": "每档 N 个扣 × M 档",
+    "size": "照片没有尺子，只写相对比例"
+  },
+  "skus": [
+    {
+      "sku_id": "SU-EXAMPLE-01",
+      "color": "橙色",
+      "color_confidence": "uncertain",
+      "facts": [
+        {"area": "structure", "item": "无钢圈", "value": "一片式无痕", "confidence": "certain", "evidence": ["121830"]},
+        {"area": "closure", "item": "背扣", "value": "无，套头", "confidence": "certain", "evidence": ["120841"]},
+        {"area": "strap", "item": "每侧带子条数", "value": "1 条，不分叉", "confidence": "certain", "evidence": ["121830"]},
+        {"area": "decoration", "item": "带子上的钻", "value": "单排波浪线，两侧都有", "confidence": "certain", "evidence": ["120914", "121830"]},
+        {"area": "decoration", "item": "钻的结束位置", "value": "过肩后到背后带子中段", "confidence": "uncertain", "evidence": ["120841"]}
+      ]
+    }
+  ],
+  "not_render": ["腰部白色小标"],
+  "open_conflicts": [
+    {"id": "C-EX-01", "description": "客户表成分与衣内标不一致（示例）", "owner": "client", "status": "open", "resolution": null}
+  ]
+}

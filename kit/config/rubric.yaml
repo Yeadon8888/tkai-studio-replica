@@ -1,0 +1,66 @@
+# Gemini 自检评分表。总分只用来排序；通过与否由"逐项下限 + 硬否决"决定。
+version: 1
+max_attempts: 5
+pass:
+  weighted_min: 8.0          # 加权总分下限
+  dimension_floor: 6.5       # 任何一项低于它 = 不通过
+  second_judge: true         # 开启时两次评分逐项取较低值（对冲 Gemini 偏宽松）
+dimensions:
+  soul_fidelity:       {weight: 0.20, check: "钩子类型、情绪曲线、信息顺序、转化动作与灵魂卡一致；must_keep 项逐条出现", evidence: [soul_must_keep_missing, client_requirement_unmet]}
+  product_consistency: {weight: 0.25, check: "形状/颜色/材质/关键细节与产品参考图一致；不变形、不无中生有", evidence: [product_wrong_detail, product_deformed, client_requirement_unmet]}
+  person_consistency:  {weight: 0.10, check: "同一人物跨镜头一致，与定妆图相符", evidence: [person_mismatch]}
+  visual_quality:      {weight: 0.15, check: "无畸变、闪烁、多余肢体、穿帮；材质物理合理（本项目：全程零褶皱）", evidence: [motion_artifact, compliance_fail, product_deformed]}
+  audio_text:          {weight: 0.10, check: "口播清楚、关键词不读错；字幕与口播一致；音画同步", evidence: [audio_sync, keyword_misspoken]}
+  pacing_structure:    {weight: 0.05, check: "时长、镜头数、切点与计划相符", evidence: [pacing_off]}
+  platform_signals:    {weight: 0.15, check: "平台信号代理分（启发式，非真实算法）：前3秒留人、节奏换点、结果停留、转化/互动触发、原生感，见 references/platform-signals.md", evidence: [weak_hook, pacing_off]}
+vetoes:                       # 命中任意一条直接不通过（不看分数）
+  - product_deformed
+  - product_wrong_detail
+  - person_mismatch
+  - keyword_misspoken
+  - forbidden_content
+  - soul_must_keep_missing
+  - compliance_fail            # 合规关 C1–C8 任一不过（来自 Prompt Lab 的评审体系）
+  - client_requirement_unmet   # 甲方定制要求（product_profile.client_requirements）任一条没做到
+# 失败归因 → 退回哪个阶段、做什么。Gemini 必须给出 cause。
+causes:
+  product_wrong_detail:  {stage: consistency, retry_from: generate, fix: "强化产品参考图（加细节特写图）+ 在提示词里逐项写死该细节与方位，删掉与参考图冲突的描述"}
+  product_deformed:      {stage: consistency, retry_from: generate, fix: "换更少运动的镜头设计；产品出现时降低动作幅度；必要时改走首尾帧"}
+  person_mismatch:       {stage: consistency, retry_from: keyframes, fix: "重做定妆图/关键帧，所有镜头引用同一张锚点图；人物锚点文字逐字复用"}
+  keyword_misspoken:     {stage: delivery, retry_from: script, fix: "改写该词或整句（避开生僻词、拆短句）；字幕仍写原词"}
+  soul_must_keep_missing: {stage: consistency, retry_from: plan, fix: "回到换皮方案，补回缺失的 must_keep，并写明它在哪一镜、由哪句台词触发"}
+  forbidden_content:     {stage: delivery, retry_from: plan, fix: "删除违规内容，重新过合规清单"}
+  motion_artifact:       {stage: glitches, retry_from: generate, fix: "缩短单镜时长、减少同时运动的元素、降低镜头运动"}
+  pacing_off:            {stage: delivery, retry_from: plan, fix: "调整镜头时长与切点，对齐灵魂卡的节奏曲线"}
+  audio_sync:            {stage: delivery, retry_from: compose, fix: "按词级时间戳重新对齐字幕/事件；必要时重做配音"}
+  weak_hook:             {stage: delivery, retry_from: plan, fix: "重写前3秒：第1秒产品清楚入画 + 开口第一句直接说感受/结果；去掉铺垫"}
+  compliance_fail:       {stage: glitches, retry_from: plan, fix: "按失败的合规项（C1–C8）逐条修，重新过合规清单"}
+  client_requirement_unmet: {stage: consistency, retry_from: plan, fix: "把未满足的甲方要求的 prompt_clause 逐字写进每个镜头提示词；必要时调整人物锚点/参考图（如大码、胸型）再生成"}
+  other:                 {stage: delivery, retry_from: plan, fix: "人工判断后再决定"}
+# 合规关（生成后必须全部通过；不计分；改编自 Prompt Lab 的 C1–C8）
+compliance:
+  C1: "产品清楚可见累计 ≥7 秒，且是画面主体"
+  C2: "产品上没有参考图之外的字、品牌、贴纸"
+  C3: "产品无形变、无多出/缺少部件"
+  C4: "演示与口播不超出产品事实表的卖点，不夸大"
+  C5: "出镜者明显成年"
+  C6: "口播与字幕不出现被禁渠道名，结尾转化句按用户原话"
+  C7: "没有乱码文字、画面里不该有的字幕"
+  C8: "AI 生成内容按平台要求可标注"
+escalate_after_attempts: 5   # 第 5 次仍不过 → 停止自动重做，交给人，并附上五轮对比
+
+# 评审顺序（流程化规范）：先查一致性，再查穿帮，最后查交付质量。
+# 上游阶段不过，下游只记录不作为修复依据——一致性都错了，修穿帮没有意义。
+stages:
+  - id: consistency
+    name: "一致性（产品·人物·灵魂·甲方要求）"
+    dimensions: [product_consistency, person_consistency, soul_fidelity]
+    vetoes: [product_wrong_detail, product_deformed, person_mismatch, soul_must_keep_missing, client_requirement_unmet]
+  - id: glitches
+    name: "穿帮（手/肢体/畸变/闪烁/褶皱/乱码字）"
+    dimensions: [visual_quality]
+    vetoes: [compliance_fail]
+  - id: delivery
+    name: "交付（口播·节奏·平台信号·禁用内容）"
+    dimensions: [audio_text, pacing_structure, platform_signals]
+    vetoes: [keyword_misspoken, forbidden_content]

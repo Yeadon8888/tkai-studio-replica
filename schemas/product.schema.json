@@ -1,0 +1,18 @@
+{
+  "title": "Product",
+  "type": "object",
+  "required": ["id", "version", "product_name", "category", "market", "language", "selling_points", "forbidden_claims", "confirmed_by_user"],
+  "properties": {
+    "id": {"type": "string"},
+    "version": {"type": "integer"},
+    "product_name": {"type": "string"},
+    "category": {"type": "string"},
+    "use_case": {"type": "string"},
+    "market": {"type": "string"},
+    "language": {"type": "string"},
+    "selling_points": {"type": "array", "items": {"type": "string"}},
+    "forbidden_claims": {"type": "array", "items": {"type": "string"}},
+    "keywords": {"type": "array", "items": {"type": "string"}},
+    "confirmed_by_user": {"type": "boolean"}
+  }
+}

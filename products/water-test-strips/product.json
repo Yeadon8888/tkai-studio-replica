@@ -1,0 +1,14 @@
+{
+  "id": "water-test-strips",
+  "version": 1,
+  "product_name": "Water test strips (pool / aquarium, general)",
+  "category": "water test strips",
+  "use_case": "Home water testing: pool free chlorine / pH, aquarium, tap water",
+  "market": "US",
+  "language": "en",
+  "selling_points": ["Quick color-match result", "Several parameters per strip"],
+  "forbidden_claims": [],
+  "keywords": ["water test strips", "pool test strips", "free chlorine test", "pH test strips", "aquaCheck test strips"],
+  "confirmed_by_user": true,
+  "notes": "卖点为占位内容，尚未由用户确认；真实产品确定后替换。"
+}

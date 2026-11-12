@@ -1,0 +1,20 @@
+{
+  "title": "Project",
+  "type": "object",
+  "required": ["id", "product_id", "product_version", "phase_goal", "planned_count", "budget"],
+  "properties": {
+    "id": {"type": "string"},
+    "product_id": {"type": "string"},
+    "product_version": {"type": "integer"},
+    "phase_goal": {"type": "string"},
+    "planned_count": {"type": "integer"},
+    "budget": {
+      "type": "object",
+      "required": ["tikhub_calls", "gemini_calls"],
+      "properties": {
+        "tikhub_calls": {"type": "integer"},
+        "gemini_calls": {"type": "integer"}
+      }
+    }
+  }
+}
