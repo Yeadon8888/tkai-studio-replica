@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "做 water-test-strips 这个品。我想复刻 C001 和 C002 两条，预算按 5 元来，先别花钱，先告诉我会怎么做。",
+      "prompt": "做 示例品 demo-product 这个品。我想复刻 候选 C001 和 C002 两条，预算按 5 元来，先别花钱，先告诉我会怎么做。",
       "expected_output": "确认品目录与预算；登记对标；说明下一步是拆解与定档；不发起付费生成。",
       "files": [],
       "assertions": [

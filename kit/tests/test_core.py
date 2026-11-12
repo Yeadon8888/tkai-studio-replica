@@ -413,7 +413,7 @@ class Decoupling(unittest.TestCase):
             if f.name == "settings.py":
                 continue
             text = f.read_text(encoding="utf-8")
-            if "/Users/" in text:
+            if "/" + "Users/" in text:
                 bad.append(f"{f.name}: 个人路径")
             for line in text.splitlines():
                 code = line.split("#")[0]

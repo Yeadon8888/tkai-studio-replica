@@ -4,7 +4,7 @@
 
 规则（写进 skill 方法论）：
 - 只在用户已经说明可以上传这个视频时使用（默认 MEDIA_UPLOAD=github_temp 视为已授权上传"对标视频"这一类）。
-- 上传到用户自己 GitHub 账号下的专用公开仓库（MEDIA_HOST_REPO，默认 Yeadon8888/studio-media-temp），
+- 上传到用户自己 GitHub 账号下的专用公开仓库（MEDIA_HOST_REPO，必须在 .env 里设置），
   不使用任何网页上的访问码，也不使用其他人的图床。
 - 拆解完成后立即删除该文件，并把删除结果记入 media_log.jsonl。删除失败要告诉用户。
 - 只上传视频，不上传封面、不上传运行日志。
@@ -54,6 +54,8 @@ def upload(local, repo=None):
     if size > 90 * 1024 * 1024:
         raise SystemExit("文件超过 90MB，不上传。")
     repo = repo or settings.get("MEDIA_HOST_REPO")
+    if not repo:
+        raise SystemExit("未设置 MEDIA_HOST_REPO。请在 .env 里填写你自己的公开仓库（格式 用户名/仓库名），例如 MEDIA_HOST_REPO=your-name/studio-media-temp。仓库要先在你的 GitHub 上创建为公开仓库。")
     import hashlib
     digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     path = f"clips/{digest}{p.suffix.lower()}"

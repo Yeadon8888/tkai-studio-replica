@@ -7,7 +7,7 @@
 ## 默认做法：整条上传 → 整条拆解 → 删除
 
 1. **确认授权**：用户给本地文件，本身就表示同意把它上传到公网做拆解。只在 `.env` 的 `MEDIA_UPLOAD=github_temp` 时执行；如果是 `off`，先问用户。
-2. **上传**：`kit/media_host.py` 把视频放进用户自己 GitHub 账号下的专用公开仓库（`MEDIA_HOST_REPO`，默认 `Yeadon8888/studio-media-temp`），路径是 `clips/<sha256 前 16 位>.<扩展名>`。
+2. **上传**：`kit/media_host.py` 把视频放进用户自己 GitHub 账号下的专用公开仓库（需要先在 GitHub 上创建为公开仓库）（`MEDIA_HOST_REPO`，必须在 `.env` 里填写，例如 `your-name/studio-media-temp`），路径是 `clips/<sha256 前 16 位>.<扩展名>`。
    - 只用 `gh` 命令行和用户已登录的 GitHub 账号。
    - 不用网页上的访问码，也不用别人的图床。
    - 不上传封面、日志或其它文件。

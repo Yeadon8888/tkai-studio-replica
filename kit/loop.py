@@ -178,10 +178,16 @@ def cmd_gen(a):
     if existing or (not claimed and not (job_path.exists() and _read(job_path).get("status") == "failed")):
         job = _read(job_path) if job_path.exists() else {"task_id": "?", "status": "claiming"}
         print(f"{tid} 已有提交占位或任务 {job.get('task_id')}（状态 {job.get('status')}），不重复提交")
+        if not job_path.exists() or not job.get("task_id") or job.get("task_id") == "?":
+            return  # 只有占位、没有任务号：不能轮询，交给人（占位文件保留，避免重复提交）
     else:
         if a.cap < 1:
             sys.exit("预算上限为 0，拒绝提交")
-        images = [_data_uri(p) for p in brief["images"]]
+        try:
+            images = [_data_uri(p) for p in brief["images"]]
+        except OSError as e:
+            claim.unlink(missing_ok=True)  # 还没有提交，释放占位
+            sys.exit(f"参考图读取失败（未提交，占位已释放）：{e}")
         body = {"model": GEN_MODEL, "prompt": brief["prompt"], "images": images,
                 "duration": brief.get("duration", 10), "resolution": brief.get("resolution", "768p"),
                 "aspect_ratio": brief.get("aspect_ratio", "9:16")}
@@ -339,9 +345,10 @@ def cmd_board(a):
     调研批次默认 BOARD_RESEARCH，可在 project.json 里写 research_dir 覆盖；输出默认 <项目>/board.html。"""
     project = Path(a.project)
     meta = _read(project / "project.json") if (project / "project.json").exists() else {}
-    research_dir = ROOT / (a.research or meta.get("research_dir") or BOARD_RESEARCH)
-    data = {"subtitle": "调研 → 生成 → 评审 → 闸门（规则见 GATES.md）",
-            "research": research.build(research_dir)}
+    rel = a.research or meta.get("research_dir") or BOARD_RESEARCH
+    data = {"subtitle": "调研 → 生成 → 评审 → 闸门（规则见 GATES.md）"}
+    if rel:
+        data["research"] = research.build(ROOT / rel)
     if (project / "takes.json").exists():
         data["production"] = production.build(project / "takes.json")
     title = a.title or f"生成看板 · {meta.get('id', project.name)}"

@@ -23,7 +23,7 @@ DEFAULTS = {
     "STUDIO_HOME": "",
     # 调研批次的根目录（相对路径按 STUDIO_HOME 的上一级解析）。
     "RESEARCH_ROOT": "research/tiktok-benchmark",
-    "BOARD_RESEARCH": "research/tiktok-benchmark/20261111-loop-test-A",
+    "BOARD_RESEARCH": "",          # 看板默认调研批次（相对 workspace）；留空 = 不显示调研页
     # 密钥文件（逗号分隔）。只读取下面 SECRET_KEYS 里的变量。
     "CREDENTIALS_FILES": "~/.config/tokensfactory/credentials.env,~/.config/tikhub/credentials.env",
     # 供应方与地址
@@ -56,7 +56,7 @@ DEFAULTS = {
     "REVIEW_FRAMES": "8",
     # 本地视频：github_temp = 上传到下面的公开临时仓库，拆解后删除；off = 禁止上传，只能抽帧
     "MEDIA_UPLOAD": "github_temp",
-    "MEDIA_HOST_REPO": "Yeadon8888/studio-media-temp",
+    "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
 TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise")
