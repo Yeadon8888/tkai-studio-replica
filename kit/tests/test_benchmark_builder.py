@@ -48,7 +48,7 @@ class BenchmarkBuilderTest(unittest.TestCase):
             "fixed": {"style": "handheld UGC", "action": "show and dip", "scene": "poolside",
                       "camera": "vertical close-up", "rhythm": "show, dip, compare"},
             "must_keep": ["show bottle", "dip strip", "compare result"],
-            "prompt_fixed": "Vertical handheld UGC. Show the bottle, dip the strip, then compare the result.",
+            "prompt_fixed": "Vertical handheld UGC. Show the product, dip the strip, then compare the result.",
             "fixed_keywords": ["handheld", "poolside"], "has_person": True,
         }
         obj.update(overrides)

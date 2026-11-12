@@ -26,7 +26,9 @@ PROMPT = """你是短视频对标拆解师。根据视频、已有拆解和目�
 H 档必须把 style/action/scene/camera/rhythm 全部写入 fixed。
 M 档的 must_keep 必须有 3–6 项。
 L 档必须把 hook/proof/cta 的逻辑写入 fixed。
-不要输出 Markdown，不要改写或编造产品锚点。"""
+不要输出 Markdown，不要改写或编造产品锚点。
+产品写法（重要）：prompt_fixed 与 fixed 里一律用 "the product" 指代产品，不要写对标视频里的品牌名、型号、包装文字或标签内容。
+产品长什么样由我方的产品参考图和锚点决定，不由对标决定。"""
 
 
 def _read(path, default=None):
@@ -85,6 +87,9 @@ def _response_errors(obj, tier):
         errors.append("缺少列表 fixed_keywords")
     elif not all(isinstance(x, str) and x.strip() for x in obj["fixed_keywords"]):
         errors.append("fixed_keywords 只能包含非空字符串")
+    pf = (obj.get("prompt_fixed") or "") if isinstance(obj.get("prompt_fixed"), str) else ""
+    if pf and "the product" not in pf.lower():
+        errors.append('prompt_fixed 必须用 "the product" 指代产品，不能写对标的品牌或型号')
     if tier == "M" and not 3 <= len(obj.get("must_keep") or []) <= 6:
         errors.append("M 档 must_keep 必须有 3–6 项")
     if tier == "H" and not isinstance(obj.get("has_person"), bool):
