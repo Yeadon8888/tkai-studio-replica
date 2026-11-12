@@ -2,6 +2,19 @@
 
 版本规则见 `references/versioning.md`。
 
+## 0.6.0 — 2026-11-12
+
+### 新增
+- 本地视频的默认做法：上传到用户自己 GitHub 账号下的专用公开仓库，Gemini 整条视频拆解，拆完删除并核对（`kit/media_host.py`，方法见 `references/local-video.md`）。
+- 删除结果写入 `media/media_log.jsonl`；删除失败会留下记录。
+- `.env`：`MEDIA_UPLOAD`（`github_temp` 或 `off`）、`MEDIA_HOST_REPO`。
+
+### 变更
+- 本地视频不再默认抽帧。抽帧只在 `MEDIA_UPLOAD=off` 时使用，并且结果注明细节不完整。
+
+### 已知问题
+- 上传只支持 `.mp4`、`.mov`、`.webm`，且不超过 90MB。
+
 ## 0.5.1 — 2026-11-12
 
 ### 修复

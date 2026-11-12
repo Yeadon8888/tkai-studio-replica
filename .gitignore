@@ -15,3 +15,6 @@ audit/
 credentials*
 __pycache__/
 .DS_Store
+# 本地缓存（含临时上传的记录）
+.cache/
+media/

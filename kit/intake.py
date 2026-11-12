@@ -108,6 +108,33 @@ FRAMES_NOTE = ("\n\n注意：下面不是视频，是按时间顺序的抽帧（
                "口播、音效相关的内容无法判断时写 0，并在 risk 里写明\"只看了抽帧，未听声音\"。\n抽帧时间：")
 
 
+def breakdown_local_video(cand, pid):
+    """本地视频的标准做法：上传到临时公网地址 → Gemini 整条拆解 → 删除临时文件。
+    失败或删除不成功都会明确报告；记录写入 media/media_log.jsonl。"""
+    import media_host
+    import loop
+    info = media_host.upload(cand["local_file"])
+    status = {"aweme_id": cand["aweme_id"], "candidate_id": cand["candidate_id"], "source": "local",
+              "uploaded_url": info["url"]}
+    try:
+        text = loop.gemini([{"type": "text", "text": loop.BREAKDOWN_PROMPT},
+                            {"type": "video_url", "video_url": info["url"]}],
+                           project=batch_dir(pid).name, ref=cand["candidate_id"], max_tokens=4000, role="breakdown")
+        obj = loop.tt.parse_json_obj(text)
+    finally:
+        try:
+            gone = media_host.delete(info)
+            status.update(deleted=gone)
+        except Exception as e:  # 删除失败要留下记录，提醒人工处理
+            status.update(deleted=False, delete_error=str(e)[:200])
+        media_host.log(info, status)
+    if obj is None:
+        return None
+    obj.update(aweme_id=cand["aweme_id"], candidate_id=cand["candidate_id"], breakdown_at=loop._now(),
+               source="local_upload_whole_video", media_deleted=status.get("deleted"))
+    return obj
+
+
 def breakdown_file(cand, pid, n=12):
     """本地文件：抽帧 → 文本模型看图拆解。返回与视频拆解同结构的记录。"""
     import loop
@@ -136,13 +163,16 @@ def cmd_breakdown(pid, ids=None):
     todo = [c for c in cands if (not ids or c["candidate_id"] in ids) and c["aweme_id"] not in done]
     url_ids = [c["candidate_id"] for c in todo if not c.get("local_file")]
     for c in [c for c in todo if c.get("local_file")]:
-        obj = breakdown_file(c, pid)
+        if settings.get("MEDIA_UPLOAD") == "github_temp":
+            obj = breakdown_local_video(c, pid)   # 默认：整条视频
+        else:
+            obj = breakdown_file(c, pid)          # MEDIA_UPLOAD=off：抽帧，细节不完整
         if obj is None:
             print(f"{c['candidate_id']} 模型输出无法解析，已记账")
             continue
         done[c["aweme_id"]] = obj
         _write(b / "breakdown.json", list(done.values()))
-        print(f"{c['candidate_id']} 拆解完成（抽帧）：" + " ".join(f"{k}{v}" for k, v in obj.get("dims", {}).items()))
+        print(f"{c['candidate_id']} 拆解完成（整条视频，临时文件已删除={obj.get('media_deleted')}）：" + " ".join(f"{k}{v}" for k, v in obj.get("dims", {}).items()))
     for i in range(0, len(url_ids), 3):  # loop.cmd_breakdown 每次最多 3 条
         loop.cmd_breakdown(argparse.Namespace(batch=str(b), ids=",".join(url_ids[i:i + 3]), cap=3))
 

@@ -24,6 +24,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/tiers.md` | 定档、分配条数、各档怎么出提示词 |
 | `references/experts.md` | 审判标准、三位专家的分工、通过条件 |
 | `references/reading-and-loop.md` | 拆解的读法；生成—审判—修订循环 |
+| `references/local-video.md` | 用户给本地视频时怎么上传、拆解、删除 |
 | `references/pdca.md` | 每条视频、每个品的计划—执行—检查—改进 |
 | `references/budget-and-queue.md` | 预算、品目录、多品任务队列 |
 | `references/commands.md` | 每条命令的参数 |

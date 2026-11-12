@@ -54,6 +54,9 @@ DEFAULTS = {
     "FISSION_MAX_N": "5",
     "REFINE_MAX_ATTEMPTS": "3",
     "REVIEW_FRAMES": "8",
+    # 本地视频：github_temp = 上传到下面的公开临时仓库，拆解后删除；off = 禁止上传，只能抽帧
+    "MEDIA_UPLOAD": "github_temp",
+    "MEDIA_HOST_REPO": "Yeadon8888/studio-media-temp",
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
 TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise")
