@@ -422,6 +422,60 @@ class Decoupling(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+class ManualIntake(unittest.TestCase):
+    CASES = [{"id": "M001", "tier": "H"}, {"id": "M002", "tier": "H"}, {"id": "M003", "tier": "M"},
+             {"id": "M004", "tier": "L"}, {"id": "M005", "tier": "X"}]
+
+    def test_relation_maps_to_verify_and_topic_level(self):
+        import os
+        import intake
+        import settings
+        with tempfile.TemporaryDirectory() as tmp:
+            old = intake.batch_dir
+            intake.batch_dir = lambda pid: Path(tmp) / f"manual-{pid}"
+            try:
+                f = Path(tmp) / "a.mp4"
+                f.write_bytes(b"video-bytes")
+                c1, new1 = intake.register("p", intake.file_candidate(f), "same")
+                c1b, new1b = intake.register("p", intake.file_candidate(f), "same")
+                g = Path(tmp) / "b.mp4"
+                g.write_bytes(b"other")
+                c2, _ = intake.register("p", intake.file_candidate(g), "different")
+                self.assertTrue(new1)
+                self.assertFalse(new1b)                       # 同一文件不重复添加
+                self.assertEqual((c1["candidate_id"], c2["candidate_id"]), ("M001", "M002"))
+                self.assertEqual(c2["topic_level"], "analogy")  # 不同品类 → 类比，最高 L
+                ver = json.loads((Path(tmp) / "manual-p" / "verify.json").read_text(encoding="utf-8"))
+                self.assertEqual({v["candidate_id"]: v["verdict"] for v in ver}, {"M001": "A", "M002": "Reject"})
+                self.assertTrue(all(v["source"] == "user" for v in ver))
+            finally:
+                intake.batch_dir = old
+
+    def test_plan_all_uses_tier_weights(self):
+        import intake
+        plan = intake.make_plan(self.CASES, 10, use_all=True, price=0.13, duration=10)
+        self.assertEqual(plan["allocation"], {"H": 4, "M": 3, "L": 2, "X": 1})
+        self.assertEqual(plan["n_planned"], 10)
+        self.assertEqual(plan["estimate_cny"], 13.0)
+        self.assertEqual({i["id"]: i["count"] for i in plan["items"] if i["tier"] == "H"}, {"M001": 2, "M002": 2})
+
+    def test_plan_pick_only_uses_named_benchmarks(self):
+        import intake
+        plan = intake.make_plan(self.CASES, 4, pick=["M003"], price=0.13, duration=10)
+        self.assertEqual([(i["id"], i["count"]) for i in plan["items"]], [("M003", 4)])
+
+    def test_plan_tiers_filters_and_reports_gap(self):
+        import intake
+        plan = intake.make_plan(self.CASES, 20, tiers=["L"], price=0.13, duration=10)
+        self.assertEqual([(i["id"], i["count"]) for i in plan["items"]], [("M004", 5)])  # 单个对标最多 5 条
+        self.assertEqual(plan["gap"], 15)
+
+    def test_plan_requires_exactly_one_mode(self):
+        import intake
+        with self.assertRaises(SystemExit):
+            intake.make_plan(self.CASES, 5)
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

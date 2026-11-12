@@ -25,6 +25,8 @@
 |---|---|---|---|
 | 定品 | `products.py` | 人确认产品卡与预算 | `products/<品>/product_state.json`、`product_anchor.txt` |
 | 调研 | `tt_research.py` | 代码做硬筛；模型（`MODEL_VERIFY`）判断是否同款 | 调研批次目录：`candidates.json`、`verify.json` |
+| 手动对标 | `intake.py` | 用户说明产品关系；链接由模型看视频，文件由模型看抽帧 | 批次 `manual-<品>`，结构与调研批次相同 |
+| 选范围 | `intake.py plan` | 用户选对标、档位或全部；代码分条数 | `products/<品>/plan.json` |
 | 拆解 | `loop.py breakdown` | 模型（`MODEL_BREAKDOWN`）按七个维度拆 | `breakdown.json` |
 | 定档 | `replication.py` | 代码按规则算 H/M/L/X | 档位与理由 |
 | 分配 | `fission.py allocate` | 代码按权重算 | 各档条数与缺口 |
@@ -54,6 +56,8 @@
 
 ## 已知的限制
 
+- 档位依赖模型给的"可复制"分数。同一条视频两次拆解可能差 1 分，档位会在相邻两档之间变动（实测 C002 一次是 L、一次是 M）。重要的对标建议人工确认档位。
+- 本地文件的拆解只看抽帧，听不到口播。
 - 专家只看抽帧，听不到声音。有口播的视频，口播一项会标"需人工听"。
 - 语音转写的模型还没有确认，台词时间只能靠视频理解模型读出，精度有限。
 - 拆解问卷仍是七个维度的固定问卷，还没有改成"先整体、再逐段、最后分保留与重做"的读法。

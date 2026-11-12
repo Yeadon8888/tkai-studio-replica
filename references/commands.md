@@ -21,6 +21,22 @@ python3 products.py queue                                   # 全部品的队列
 python3 products.py queue --set-stage <品id> <阶段>
 ```
 
+## 手动对标（`intake.py`）
+
+```bash
+python3 intake.py add-url   --product <品id> --urls <链接,链接> --relation same
+python3 intake.py add-file  --product <品id> --files <路径,路径> --relation similar
+python3 intake.py breakdown --product <品id>
+python3 intake.py tiers     --product <品id>
+python3 intake.py plan      --product <品id> --n 10 --all
+```
+
+- `--relation`：`same` 同款或同类（可到 H）；`similar` 同类不同形态（最高 L）；`different` 不同品类，只借展示方式（最高 L）。
+- 链接：用 TikHub 取一次视频信息（1 次请求），模型直接看视频拆解。
+- 本地文件：不上传到任何公开地址，只在本机抽帧后交给文本模型；听不到声音，记录里会注明。
+- `plan` 三选一：`--pick M001,M002`（指定对标）、`--tiers H,M`（指定档位）、`--all`（全部）。只出计划和预计金额，不花钱。结果写到 `products/<品>/plan.json`。
+- 手动对标存为调研批次 `manual-<品id>`，看板可用 `loop.py board --research <该批次>` 显示。
+
 ## 调研（`tt_research.py`）
 
 ```bash
