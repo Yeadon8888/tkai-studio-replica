@@ -76,7 +76,7 @@ def check(script, anchor=""):
         blocking.append(f"镜头总长 {t:g}s 与时长 {dur:g}s 不符")
     # 2. 28% 延迟
     reveal = script.get("reveal_product_at_s")
-    if reveal is not None and float(reveal) < 0.28 * dur:
+    if reveal is not None and float(reveal) < 0.28 * dur - 0.01:
         blocking.append(f"产品在 {float(reveal):g}s 出现，早于 28% 线（{0.28 * dur:g}s）；SKILL 要求前 28% 不出现产品")
     # 单手交互：视频提示词里出现"双手""另一只手""both hands"等描述即违规（持机手之外不能有第二只手操作产品）
     if script.get("hands") == "single":
@@ -87,6 +87,9 @@ def check(script, anchor=""):
     # 3. 产品锚点逐字 + 4. 单手 + 5. 敌人前置
     for i, s in enumerate(shots):
         for key in ("image_prompt", "video_prompt"):
+            # product_visible 为 False 的镜头（还没出现产品）不要求带产品锚点
+            if s.get("product_visible") is False:
+                continue
             if anchor and anchor not in (s.get(key) or ""):
                 blocking.append(f"镜头 {i + 1} 的 {key} 没有逐字包含产品锚点")
         if script.get("hands") == "single" and "one hand" not in (s.get("video_prompt") or ""):

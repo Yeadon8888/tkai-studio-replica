@@ -339,6 +339,34 @@ class RefineLoop(unittest.TestCase):
             self.assertEqual(llm_calls, [])
 
 
+class DraftPrompt(unittest.TestCase):
+    ANCHOR = "a small clear vial of water test strips with a plain white label and NO text"
+    BASE = "Use image 1 as the exact product reference: " + ANCHOR + ". crouch at the pool edge, dip, compare. daylight, handheld, vertical 9:16."
+
+    def test_accepts_draft_that_keeps_anchor_and_fixed_items(self):
+        import json as _j
+        import draft_prompt as dp
+        good = "Use image 1 as the exact product reference: " + self.ANCHOR + ". crouch at the pool edge, dip the strip, compare colour. daylight, handheld, vertical 9:16."
+        out, errs = dp.draft({"id": "H1", "prompt": self.BASE}, self.ANCHOR, "", "", "",
+                             lambda p: _j.dumps({"fit": "adapt", "fit_notes": "形态不同", "prompt": good}))
+        self.assertEqual(errs, [])
+        self.assertEqual(out["draft_fit"], "adapt")
+        self.assertEqual(out["prompt_baseline"], self.BASE)
+
+    def test_rejects_draft_that_drops_anchor(self):
+        import json as _j
+        import draft_prompt as dp
+        out, errs = dp.draft({"id": "H1", "prompt": self.BASE}, self.ANCHOR, "", "", "",
+                             lambda p: _j.dumps({"fit": "fit", "fit_notes": "", "prompt": "crouch, dip, compare, daylight, handheld, vertical"}))
+        self.assertIsNone(out)
+        self.assertTrue(any("锚点" in e for e in errs))
+
+    def test_rejects_draft_that_drops_fixed_action(self):
+        import draft_prompt as dp
+        errs = dp.check_draft("Use image 1: " + self.ANCHOR + ". stand still and talk. daylight, handheld, vertical", self.ANCHOR, self.BASE)
+        self.assertTrue(any("固定项" in e for e in errs))
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

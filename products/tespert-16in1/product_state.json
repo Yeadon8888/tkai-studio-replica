@@ -1,0 +1,13 @@
+{
+  "product_id": "tespert-16in1",
+  "name": "TESPERT 16-in-1 水质试纸",
+  "anchor": "TESPERT 16-in-1 drinking water test strip bottle: white cylindrical plastic bottle with ribbed white screw-top cap, front label showing a vertical multicolour reference colour chart with printed black text (Nitrate ppm, Lead ppm, pH and other parameter names), and white strips with coloured test pads",
+  "budget_cny": 5.0,
+  "approved_budget_cny": 5.0,
+  "budget_note": "默认 5 元，本批 2 段 × 10 秒 × 0.13 = 2.60 元",
+  "selected_benchmarks": [],
+  "runs": [
+    "20261112-tespert-16in1"
+  ],
+  "created": "2026-11-12T02:02:19+00:00"
+}
