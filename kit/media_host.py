@@ -57,25 +57,49 @@ def upload(local, repo=None):
     if not repo:
         raise SystemExit("未设置 MEDIA_HOST_REPO。请在 .env 里填写你自己的公开仓库（格式 用户名/仓库名），例如 MEDIA_HOST_REPO=your-name/studio-media-temp。仓库要先在你的 GitHub 上创建为公开仓库。")
     import hashlib
+    import shutil
+    import tempfile
     digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
-    path = f"clips/{digest}{p.suffix.lower()}"
-    payload = {"message": "temp clip for model review", "content": base64.b64encode(p.read_bytes()).decode()}
-    try:  # 同一内容已存在时（同一个 sha256 文件名），更新需要带上旧文件的 sha
-        payload["sha"] = _gh([f"repos/{repo}/contents/{path}"])["sha"]
-    except RuntimeError:
-        pass
-    res = _gh([f"repos/{repo}/contents/{path}", "-X", "PUT"], payload)
-    sha = res["content"]["sha"]
-    url = f"https://raw.githubusercontent.com/{repo}/main/{path}"
-    return {"path": path, "url": url, "sha": sha, "repo": repo, "bytes": size, "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    name = f"{digest}-{int(time.time())}{p.suffix.lower()}"
+    tag = settings.get("MEDIA_RELEASE_TAG") if "MEDIA_RELEASE_TAG" in settings.load() else "temp-clips"
+    _ensure_release(repo, tag)
+    # 用 Release 附件而不是 contents API：大文件经 contents API 会间歇返回 401，
+    # raw.githubusercontent 被模型侧大量拉取时会返回 429（2026-11-13 实测）。
+    with tempfile.TemporaryDirectory() as tmp:
+        staged = Path(tmp) / name
+        shutil.copy2(p, staged)
+        r = subprocess.run(["gh", "release", "upload", tag, str(staged), "-R", repo, "--clobber"],
+                           capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("gh release upload 失败：" + r.stderr.strip()[:300])
+    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+    return {"path": name, "url": url, "sha": digest, "repo": repo, "tag": tag, "bytes": size,
+            "host": "release_asset", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+
+def _ensure_release(repo, tag):
+    r = subprocess.run(["gh", "release", "view", tag, "-R", repo], capture_output=True, text=True)
+    if r.returncode == 0:
+        return
+    c = subprocess.run(["gh", "release", "create", tag, "-R", repo, "--title", "temp clips",
+                        "--notes", "Temporary clips for model review; assets are deleted after use"],
+                       capture_output=True, text=True)
+    if c.returncode != 0:
+        raise RuntimeError("gh release create 失败：" + c.stderr.strip()[:300])
 
 
 def delete(info):
-    """删除临时文件并核对。返回 True 表示已确认不存在。"""
-    _gh([f"repos/{info['repo']}/contents/{info['path']}", "-X", "DELETE"],
-        {"message": "remove temp clip", "sha": info["sha"], "branch": "main"})
+    """删除临时文件并核对。返回 True 表示已确认不可访问。兼容旧记录（contents API 上传的文件）。"""
     import urllib.error
     import urllib.request
+    if info.get("host") == "release_asset":
+        r = subprocess.run(["gh", "release", "delete-asset", info["tag"], info["path"], "-R", info["repo"], "-y"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError("gh release delete-asset 失败：" + r.stderr.strip()[:300])
+    else:
+        _gh([f"repos/{info['repo']}/contents/{info['path']}", "-X", "DELETE"],
+            {"message": "remove temp clip", "sha": info["sha"], "branch": "main"})
     try:
         urllib.request.urlopen(urllib.request.Request(info["url"], method="HEAD"), timeout=30)
         return False

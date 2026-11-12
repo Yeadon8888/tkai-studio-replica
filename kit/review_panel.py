@@ -250,11 +250,11 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
                     last_err = e
                     code = getattr(e, "code", None)
                     print(f"{take} {exp['id']} 第 {attempt_no} 次调用失败：{type(e).__name__} {code or ''}")
-                    transient = (isinstance(code, int) and code >= 500) or code is None
+                    transient = (isinstance(code, int) and (code >= 500 or code == 429)) or code is None
                     if not transient:
                         break
                     import time
-                    time.sleep(15)
+                    time.sleep(45 if code == 429 else 15)
             if last_err is not None:
                 failed.append({"id": exp["id"], "kind": "call_error", "error": type(last_err).__name__,
                                "status": getattr(last_err, "code", None)})
