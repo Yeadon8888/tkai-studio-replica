@@ -272,6 +272,73 @@ class PromptReview(unittest.TestCase):
         self.assertEqual(len(hist), 2)
 
 
+class RefineLoop(unittest.TestCase):
+    ANCHOR = "a small clear vial with a plain white label"
+
+    def _setup(self, tmp, budget=13.0):
+        import products
+        products.PRODUCTS = Path(tmp) / "products"
+        products.QUEUE = products.PRODUCTS / "_queue.json"
+        products.create("pz", "测试品")
+        products.approve_budget("pz", budget, "测试")
+        proj = Path(tmp) / "run"
+        (proj / "briefs").mkdir(parents=True)
+        return proj
+
+    def test_pass_on_second_attempt_and_prompt_revised_with_anchor(self):
+        import refine_loop as rl
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._setup(tmp)
+            base = {"id": "B1", "prompt": f"Use image 1. {self.ANCHOR}. crouch and lift", "images": [], "duration": 10}
+            gen_calls, llm_calls = [], []
+            def gen(p, bp):
+                gen_calls.append(bp.name)
+                (p / "takes").mkdir(exist_ok=True)
+                (p / "takes" / (bp.stem + ".mp4")).write_bytes(b"x")
+            def review(p, tid, refs):
+                if tid.endswith("a1"):
+                    return {"decision": "repair", "weighted": 6.0, "repair": [{"cause": "product_wrong_detail", "fix": "x"}]}
+                return {"decision": "pass", "weighted": 8.5}
+            def llm(prompt):
+                llm_calls.append(prompt)
+                return json.dumps({"prompt": f"Use image 1. {self.ANCHOR}. crouch, lift, label clean"})
+            res = rl.run(base, proj, "pz", [], gen, review, llm, self.ANCHOR, max_attempts=3, log_dir=proj / "refine")
+            self.assertEqual(res["status"], "succeeded")
+            self.assertEqual(len(gen_calls), 2)
+            self.assertEqual(len(llm_calls), 1)
+
+    def test_revision_without_anchor_is_rejected(self):
+        import refine_loop as rl
+        new, errs = rl.revise("p", self.ANCHOR, "", [], lambda _: json.dumps({"prompt": "no anchor here"}))
+        self.assertIsNone(new)
+        self.assertTrue(any("锚点" in e for e in errs))
+
+    def test_budget_stops_before_generation(self):
+        import refine_loop as rl
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._setup(tmp, budget=0.5)
+            base = {"id": "B2", "prompt": self.ANCHOR, "images": [], "duration": 10}
+            called = []
+            res = rl.run(base, proj, "pz", [], lambda p, b: called.append(1), lambda *a: {}, lambda _: "", self.ANCHOR,
+                         max_attempts=3, log_dir=proj / "refine")
+            self.assertEqual(res["status"], "budget_stop")
+            self.assertEqual(called, [])
+
+    def test_escalate_stops_without_revision(self):
+        import refine_loop as rl
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._setup(tmp)
+            base = {"id": "B3", "prompt": self.ANCHOR, "images": [], "duration": 10}
+            def gen(p, bp):
+                (p / "takes").mkdir(exist_ok=True)
+                (p / "takes" / (bp.stem + ".mp4")).write_bytes(b"x")
+            llm_calls = []
+            res = rl.run(base, proj, "pz", [], gen, lambda *a: {"decision": "escalate"}, lambda p: llm_calls.append(p) or "",
+                         self.ANCHOR, max_attempts=3, log_dir=proj / "refine")
+            self.assertEqual(res["status"], "escalated")
+            self.assertEqual(llm_calls, [])
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

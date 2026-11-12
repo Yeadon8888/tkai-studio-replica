@@ -15,6 +15,7 @@ compatibility: 需要 python3、ffprobe（ffmpeg）、studio/kit 仓库代码；
 - `references/commands.md`：每个子命令的参数与示例。
 - `references/pdca.md`：PDCA 怎么套在每条视频和每个品上（计划→执行→检查→改进）。
 - `references/experts.md`：三位专家的分工、判定方式与通过条件。
+- `references/reading-and-loop.md`：拆解怎么借 Hypit 的读法，以及生成—审判—修订循环。
 
 ## PDCA（每条视频、每个品都走一遍）
 
