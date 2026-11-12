@@ -7,7 +7,7 @@
 自检条款（阻塞）：
 1. 必填字段齐全（敌人、痛点、机制、Macro 开关及理由、手部约束、时长、产品出现时间、镜头）。
 2. 镜头时间轴从 0 连续到时长，无空隙、无重叠。
-3. 产品第一次出现不早于 28%（SKILL：前 25%–28% 不允许出现产品）。
+3. 产品第一次出现不早于 28%（SKILL：前 28% 不允许出现产品）。
 4. 每个镜头的 image_prompt 与 video_prompt 都逐字包含产品锚点（product_anchor.txt）。
 5. 手部约束为 single 时，每个 video_prompt 都含 "one hand"（单手自拍物理限制）。
 6. 第一个镜头必须包含敌人（先攻击替代方案，SKILL：敌人前置）。
@@ -76,8 +76,14 @@ def check(script, anchor=""):
         blocking.append(f"镜头总长 {t:g}s 与时长 {dur:g}s 不符")
     # 2. 28% 延迟
     reveal = script.get("reveal_product_at_s")
-    if reveal is not None and float(reveal) < 0.25 * dur:
-        blocking.append(f"产品在 {float(reveal):g}s 出现，早于 25% 线（{0.25 * dur:g}s）；SKILL 要求前 25%–28% 不出现产品")
+    if reveal is not None and float(reveal) < 0.28 * dur:
+        blocking.append(f"产品在 {float(reveal):g}s 出现，早于 28% 线（{0.28 * dur:g}s）；SKILL 要求前 28% 不出现产品")
+    # 单手交互：视频提示词里出现"双手""另一只手""both hands"等描述即违规（持机手之外不能有第二只手操作产品）
+    if script.get("hands") == "single":
+        for i, s_ in enumerate(shots):
+            vp = (s_.get("video_prompt") or "").lower()
+            if any(w in vp for w in ("both hands", "two hands", "other hand", "second hand")):
+                blocking.append(f"镜头 {i + 1} 的 video_prompt 出现第二只手操作（单手约束）")
     # 3. 产品锚点逐字 + 4. 单手 + 5. 敌人前置
     for i, s in enumerate(shots):
         for key in ("image_prompt", "video_prompt"):

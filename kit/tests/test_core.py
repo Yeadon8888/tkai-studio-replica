@@ -233,6 +233,45 @@ class CallLimits(unittest.TestCase):
                 ledger.LEDGER_FILE = old
 
 
+class PromptReview(unittest.TestCase):
+    def _ok_script(self):
+        from test_core_fixtures import good_script, ANCHOR  # noqa
+        return good_script(), ANCHOR
+
+    def test_clean_script_stops_after_one_round(self):
+        import json as _j
+        import prompt_review as pr
+        script, anchor = self._ok_script()
+        calls = []
+        def llm(prompt):
+            calls.append(prompt)
+            return _j.dumps({"issues": [], "verdict": "pass"})
+        out, hist = pr.run(script, anchor, llm, rounds=3)
+        self.assertEqual(len(hist), 1)
+        self.assertEqual(len(calls), 1)  # 没有问题就不修改
+
+    def test_block_issue_triggers_revision_then_pass(self):
+        import json as _j
+        import prompt_review as pr
+        script, anchor = self._ok_script()
+        seq = [_j.dumps({"issues": [{"id": "enemy_first", "severity": "block", "shot": 1, "problem": "x", "fix": "y"}],
+                         "verdict": "revise"}),
+               _j.dumps(script),                      # revise 的返回
+               _j.dumps({"issues": [], "verdict": "pass"})]
+        it = iter(seq)
+        out, hist = pr.run(script, anchor, lambda p: next(it), rounds=3)
+        self.assertEqual(len(hist), 2)
+        self.assertEqual(hist[-1]["verdict"], "pass")
+
+    def test_stops_at_round_limit(self):
+        import json as _j
+        import prompt_review as pr
+        script, anchor = self._ok_script()
+        bad = _j.dumps({"issues": [{"id": "x", "severity": "block", "shot": 1, "problem": "p", "fix": "f"}], "verdict": "revise"})
+        out, hist = pr.run(script, anchor, lambda p: bad if "质检员" in p else _j.dumps(script), rounds=2)
+        self.assertEqual(len(hist), 2)
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 
@@ -255,7 +294,7 @@ class OwnScriptChecks(unittest.TestCase):
     def test_early_product_reveal_is_blocking(self):
         import own_script
         res = own_script.check(self._script(reveal_product_at_s=1), self.ANCHOR)
-        self.assertTrue(any("25%" in m for m in res["blocking"]))
+        self.assertTrue(any("28%" in m for m in res["blocking"]))
 
     def test_missing_anchor_and_gap_are_blocking(self):
         import own_script

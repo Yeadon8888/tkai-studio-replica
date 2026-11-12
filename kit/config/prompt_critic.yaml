@@ -1,0 +1,56 @@
+# 提示词评审标准（v1，2026-11-12）。由 prompt_review.py 使用：AI 按这些条款逐条挑毛病，给出修改意见。
+# 来源：
+#   S = methods/tiktok-script-generator/SKILL.md（高转化脚本与防穿帮规则）
+#   D = Hypit 导演原则（~/.claude/skills/hypit/SKILL.md：先看参考、找出它为什么抓人，再做选择）
+#   C = 产品与人物一致性（config/rubric.yaml、experts.yaml）
+# severity：block = 必须修，不修不生成；warn = 建议修，记录但不阻塞。
+
+criteria:
+  - id: enemy_first
+    severity: block
+    source: S
+    rule: "开场不推销。第一个镜头必须先攻击观众现在用的替代方案（具体的旧习惯或竞品）。"
+  - id: reveal_delay
+    severity: block
+    source: S
+    rule: "产品实体在前 28% 的时长内不出现（10 秒视频即 2.8 秒之前不能有产品）。reveal_product_at_s 不得小于 28%×时长。"
+  - id: mechanism_opposite
+    severity: block
+    source: S
+    rule: "一句话机制必须是替代方案失败原因的对立面，不能只是换个说法。"
+  - id: single_hand_interaction
+    severity: block
+    source: S
+    rule: "产品交互只用一只手（另一只手持机）。出现'另一只手拧瓶盖''双手'等描述即违规。"
+  - id: single_hand
+    severity: block
+    source: S
+    rule: "手持自拍时人物只用一只手操作产品，持机手必须锁定；展示细节靠把产品靠近镜头，不用手去指。"
+  - id: no_background_in_video_prompt
+    severity: warn
+    source: S
+    rule: "视频提示词只描述人物与产品的动作，不描述背景和场景（场景由单独的字段说明）。"
+  - id: anchor_verbatim
+    severity: block
+    source: C
+    rule: "每个镜头的 image_prompt 与 video_prompt 都逐字包含产品锚点，不得改写产品细节。"
+  - id: label_no_text
+    severity: block
+    source: C
+    rule: "凡是涉及产品标签的提示词，必须写明标签没有文字（或只有参考图里的文字），不能让模型自由发挥。"
+  - id: one_clear_action_per_beat
+    severity: warn
+    source: D
+    rule: "每个镜头只做一个清楚的动作。一个镜头里塞多个动作，模型容易做乱。"
+  - id: hook_in_first_3s
+    severity: block
+    source: D
+    rule: "前 3 秒要抓住注意力：人物朝向镜头，用表情或一句话抛出问题（敌人或痛点）。产品实体不在前 28% 出现，所以这里不要求产品入画。"
+  - id: why_it_holds
+    severity: warn
+    source: D
+    rule: "每个镜头要能说出它为什么抓人（情绪、悬念、结果或动作变化）。说不出的镜头提示修改。"
+  - id: no_contradiction
+    severity: block
+    source: C
+    rule: "镜头之间不互相矛盾（同一物件位置、人物状态、数量前后一致）。"
