@@ -62,6 +62,20 @@ th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertic
 th{color:var(--muted);font-weight:600}
 .tablewrap{overflow-x:auto}
 a{color:var(--accent)}
+.take{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin:10px 0}
+.take .tk{width:200px;max-width:100%;aspect-ratio:9/16;border-radius:10px;background:#000;flex:none}
+.take .tk.none{display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px}
+.take .tinfo{flex:1;min-width:220px}
+.take .tinfo p{margin:4px 0}
+ul.iss{margin:6px 0;padding-left:18px;font-size:14px}
+.dimgrid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+details.past{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
+details.past summary{cursor:pointer;min-height:36px;display:flex;align-items:center;color:var(--accent);font-size:14px}
+details.past .take .tk{width:140px}
+.prompt{font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
+button.chip{font:inherit;cursor:pointer;color:var(--fg);min-height:36px}
+.tag.g-good{color:var(--ok);border-color:var(--ok)} .tag.g-minor{color:var(--accent);border-color:var(--accent)}
+.tag.g-low{color:var(--warn);border-color:var(--warn)} .tag.g-severe{color:var(--bad);border-color:var(--bad)}
 .hidden{display:none}
 .pick{display:flex;gap:6px;align-items:center;min-height:40px;font-size:14px}
 .btn2{font:inherit;min-height:40px;padding:6px 12px;border-radius:10px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
@@ -152,24 +166,61 @@ function openCase(id){
 }
 const DIMS_NAME = '钩子 · 人 · 货 · 场 · 证明 · 行动 · 可复制，每项 0–2';
 
+function takeBody(t, rule, compact){
+  const sc = t.scores || {};
+  const floor = rule.dimension_floor || 6.5;
+  const dims = Object.keys(sc).map(k => `<div><span class="muted">${esc(k)}</span> <b>${fmt(sc[k])}</b><div class="bar ${sc[k] < floor ? 'low' : ''}"><span style="width:${Math.max(0,Math.min(10,sc[k]||0))*10}%"></span></div></div>`).join('');
+  const vet = (t.vetoes || []).length ? `<p class="muted">否决：${esc(t.vetoes.join('、'))}</p>` : '';
+  const issues = (t.issues || []).slice(0, compact ? 3 : 8).map(i => `<li>${i.at ? `<span class="muted">${esc(i.at)}</span> ` : ''}${esc(i.detail)}</li>`).join('');
+  const more = (t.issues || []).length > (compact ? 3 : 8) ? `<p class="muted">另有 ${(t.issues.length - (compact ? 3 : 8))} 条问题</p>` : '';
+  const cost = `${fmt(t.cost_cny)} 元${t.cost_estimated ? '（估算）' : ''}${t.submits > 1 ? ` · 提交 ${t.submits} 次` : ''}`;
+  const video = t.video
+    ? `<video controls preload="metadata" playsinline class="tk" src="${esc(t.video)}"></video>`
+    : '<div class="tk none">没有成片文件</div>';
+  return `<div class="take">${video}
+    <div class="tinfo"><div><span class="tag g-${esc(t.grade)}">${esc(t.grade_text || '')}</span> <b>${esc(t.id || '')}</b></div>
+      <p class="muted">第 ${show(t.attempt)} 轮 · 加权 ${show(t.weighted)} · ${cost}</p>
+      ${vet}${issues ? `<ul class="iss">${issues}</ul>${more}` : (t.grade === 'unreviewed' ? '<p class="muted">还没有评审结果。</p>' : (t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ''))}
+      ${compact ? '' : (dims ? `<div class="grid dimgrid">${dims}</div>` : '')}
+      ${t.video ? `<p><a href="${esc(t.video)}" target="_blank" rel="noopener">在新窗口打开 ↗</a></p>` : ''}</div></div>`;
+}
+
+function statLine(st){
+  if (!st) return '';
+  const rate = st.scrap_rate == null ? '未评审' : Math.round(st.scrap_rate * 100) + '%';
+  const per = st.cost_per_good == null ? '尚无通过' : st.cost_per_good + ' 元';
+  return {rate, per};
+}
+
 function renderProduction(){
   const P = DATA.production; if(!P){ return '<p class="muted">还没有生成数据。</p>'; }
   const rule = P.rule || {};
-  const head = `<div class="sec"><h4>通过条件</h4><p class="muted">加权总分 ≥ ${show(rule.weighted_min)}；每个维度 ≥ ${show(rule.dimension_floor)}；没有否决项。先查一致性，再查穿帮，最后查交付。最多 ${show(rule.max_attempts)} 轮，超过交给人。</p></div>`;
-  const briefs = (P.briefs || []).map(b => {
-    const takes = (b.takes || []).map(t => {
-      const sc = t.scores || {};
-      const dims = Object.keys(sc).map(k => `<div><span class="muted">${esc(k)}</span> <b>${fmt(sc[k])}</b><div class="bar ${sc[k] < (rule.dimension_floor||6.5) ? 'low' : ''}"><span style="width:${Math.max(0,Math.min(10,sc[k]||0))*10}%"></span></div></div>`).join('');
-      const vet = (t.vetoes || []).length ? `<p class="muted">否决：${esc(t.vetoes.join('、'))}</p>` : '';
-      const dec = t.decision || '未提供';
-      return `<article class="sec"><div><span class="tag ${esc(dec)}">${esc(dec)}</span> <b>${esc(t.id||'')}</b> <span class="muted">第 ${show(t.attempt)} 轮 · 加权 ${show(t.weighted)}${dec==='pass'?'':' · 阶段 '+show(t.stage)}</span>${t.needs_human_look?' <span class="tag repair">有无证据低分，请人看一眼</span>':''}</div>
-        <p>${esc(t.note || '')}</p>${dims ? `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">${dims}</div>` : '<p class="muted">还没有评分。</p>'}${vet}
-        ${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ''}
-        ${t.video ? `<video controls preload="metadata" playsinline style="width:100%;max-width:280px;border-radius:8px;background:#000" src="${esc(t.video)}"></video><p><a href="${esc(t.video)}" target="_blank" rel="noopener">查看成片 ↗</a></p>` : '<p class="muted">没有成片文件。</p>'}</article>`;
-    }).join('');
-    return `<h3 style="font-size:15px;margin:18px 0 4px">${esc(b.title || b.id)}</h3><p class="muted">${esc(b.brief_note || '')}</p>${takes || '<p class="muted">没有成片。</p>'}`;
+  const st = P.stats || {};
+  const sl = statLine(st) || {};
+  const GT = P.grade_text || {};
+  const kpi = `<div class="kv">
+    <div>成片总数<b>${show(st.takes)}</b></div><div>通过<b>${show(st.good)}</b></div>
+    <div>废片率<b>${esc(sl.rate || '未提供')}</b></div>
+    <div>总花费${st.cost_estimated ? '（含估算）' : ''}<b>${show(st.cost_cny)} 元</b></div>
+    <div>每条成品单价<b>${esc(sl.per || '未提供')}</b></div></div>`;
+  const head = `<p class="muted">通过条件：加权总分 ≥ ${show(rule.weighted_min)}；每个维度 ≥ ${show(rule.dimension_floor)}；没有否决项。废片率 = 未通过 ÷ 已评审。成品单价 = 这一组的全部花费 ÷ 通过条数。</p>`;
+  const f = state.gfilter || '全部';
+  const counts = (st.by_grade || {});
+  const chips = ['全部', 'good', 'minor', 'low', 'severe', 'unreviewed'].filter(g => g === '全部' || counts[g]).map(g =>
+    `<button class="chip ${f === g ? 'on' : ''}" data-gf="${g}">${g === '全部' ? '全部' : esc(GT[g] || g)}${g === '全部' ? '' : ' ' + counts[g]}</button>`).join('');
+  const series = (P.series || []).filter(s => f === '全部' || s.takes.some(t => t.grade === f)).map(s => {
+    const fin = s.takes.find(t => t.id === s.final) || s.takes[0];
+    const ss = s.stats || {}; const l = statLine(ss);
+    const past = (s.past || []);
+    const pastCost = Math.round(past.reduce((a, t) => a + (t.cost_cny || 0), 0) * 100) / 100;
+    const open = (fin.grade === 'severe' || f === 'severe' || f === 'low') && past.length ? ' open' : '';
+    const pastHtml = past.length ? `<details class="past"${open}><summary>过往废片 ${past.length} 条 · 花费 ${pastCost} 元（点开查看）</summary>${past.map(t => takeBody(t, rule, true)).join('')}</details>` : '';
+    const prompt = fin.prompt ? `<details class="past"><summary>这条成片的提示词</summary><p class="prompt">${esc(fin.prompt)}</p></details>` : '';
+    return `<section class="sec series"><h4>${esc(s.title || s.id)}</h4>
+      <p class="muted">系列 ${esc(s.id)} · 共 ${ss.takes} 条 · 通过 ${ss.good} · 废片率 ${esc(l.rate)} · 花费 ${show(ss.cost_cny)} 元 · 成品单价 ${esc(l.per)}</p>
+      ${takeBody(fin, rule, false)}${prompt}${pastHtml}</section>`;
   }).join('');
-  return head + (briefs || '<p class="muted">还没有生成记录。</p>');
+  return kpi + head + `<div class="chips">${chips}</div>` + (series || '<p class="muted">没有符合条件的成片。</p>');
 }
 
 function render(){
@@ -177,6 +228,7 @@ function render(){
   const body = $('#body');
   body.innerHTML = state.tab === 'research' ? renderResearch() : renderProduction();
   body.querySelectorAll('.chip[data-g]').forEach(el => el.onclick = () => { state.group = el.dataset.g; render(); });
+  body.querySelectorAll('.chip[data-gf]').forEach(el => el.onclick = () => { state.gfilter = el.dataset.gf; render(); });
   body.querySelectorAll('[data-case]').forEach(el => el.onclick = e => { if (e.target.closest('[data-stop]')) return; openCase(el.dataset.case); });
   body.querySelectorAll('input[data-sel]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.sel) : state.selected.delete(el.dataset.sel); saveSel(); render(); });
   const exp = body.querySelector('#exp');

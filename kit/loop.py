@@ -17,6 +17,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import os
 import subprocess
 import sys
@@ -264,12 +265,39 @@ def cmd_review(a):
 
 # ---------------------------------------------------------------- 4. 汇总 与 看板
 
+def series_root(brief_id, parents):
+    """提示词系列的根：沿 retry_of / parent 往上找；没有记录时去掉 -r2、-a3 这类轮次后缀。"""
+    seen, cur = set(), brief_id
+    while parents.get(cur) and cur not in seen:
+        seen.add(cur)
+        cur = parents[cur]
+    return re.sub(r"-(?:r|a)\d+$", "", cur)
+
+
+def take_costs(project_name):
+    """从账本汇总每条成片的花费（同一条被重复提交时会累加，能看出重复付费）。"""
+    out = {}
+    if not ledger.LEDGER_FILE.exists():
+        return out
+    for line in ledger.LEDGER_FILE.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("project") != project_name or not r.get("ref") or r.get("estimate_cny") is None:
+            continue
+        if r.get("status") == "submitted":
+            c = out.setdefault(r["ref"], {"cny": 0.0, "submits": 0})
+            c["cny"] = round(c["cny"] + float(r["estimate_cny"]), 4)
+            c["submits"] += 1
+    return out
+
+
 def cmd_assemble(a):
     project = Path(a.project)
     briefs = sorted((project / "briefs").glob("*.json"))
+    all_briefs = [_read(bp) for bp in briefs]
+    parents = {b["id"]: (b.get("retry_of") or b.get("parent")) for b in all_briefs}
+    costs = take_costs(project.name)
     takes_by_brief = []
-    for bp in briefs:
-        b = _read(bp)
+    for b in all_briefs:
         takes = []
         for t in b.get("takes", [b["id"]]):
             tid = t if isinstance(t, str) else t["id"]
@@ -283,8 +311,16 @@ def cmd_assemble(a):
                 reviews = [rec]
             else:
                 reviews = rec or []
+            cost = costs.get(tid)
+            dur = float(b.get("duration", settings.get_float("VIDEO_DURATION")))
             takes.append({"id": tid, "attempt": b.get("attempt", 1), "note": b.get("summary", "")[:120],
                           "video": f"takes/{tid}.mp4" if vp.exists() else None,
+                          "series": series_root(b["id"], parents), "duration": dur,
+                          # 花费优先取账本；账本没有记录时按 时长 × 单价 估算，并标明是估算
+                          "cost_cny": cost["cny"] if cost else (round(dur * settings.video_price(), 2) if vp.exists() else 0.0),
+                          "cost_estimated": cost is None, "submits": cost["submits"] if cost else None,
+                          "machine_blocking": (rec.get("machine") or {}).get("blocking", []) if isinstance(rec, dict) else [],
+                          "prompt": (b.get("prompt") or "")[:600],
                           "reviews": reviews})
         takes_by_brief.append({"id": b["id"], "title": b.get("title", b["id"]), "takes": takes,
                                "note": b.get("summary", "")})

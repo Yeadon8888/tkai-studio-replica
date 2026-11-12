@@ -36,7 +36,7 @@
 | 生成 | `loop.py gen` | 代码查预算与在途任务 | `takes/<id>.mp4`、`jobs/<id>.json` |
 | 审判 | `review_panel.py`、`gate.py` | 代码做机器检查；模型（`MODEL_REVIEW`）按清单判；代码合并与裁决 | `reviews/<id>.json`、判定 |
 | 修订 | `refine_loop.py` | 模型（`MODEL_REVISE`）改提示词；代码查硬约束、预算、轮数 | `refine/<id>.jsonl`、下一轮简报 |
-| 看板 | `loop.py assemble`、`board` | 代码 | `board.html` |
+| 看板 | `loop.py assemble`、`board`、`production.py` | 代码：按提示词系列归组、分级、算废片率与成品单价 | `board.html`（每组显示当前成片，过往废片可展开） |
 | 校准 | `calibrate.py` | 人给判定，代码算一致率 | 是否要改专家提示词的依据 |
 
 ## 四个置信度

@@ -476,6 +476,59 @@ class ManualIntake(unittest.TestCase):
             intake.make_plan(self.CASES, 5)
 
 
+class BoardSeries(unittest.TestCase):
+    def _takes(self, tmp):
+        good = [{"scores": {k: 9 for k in ["soul_fidelity", "product_consistency", "person_consistency", "visual_quality",
+                                             "audio_text", "pacing_structure", "platform_signals"]}, "vetoes": [], "issues": []}]
+        bad = [{"scores": {"soul_fidelity": 9, "product_consistency": 4, "person_consistency": 9, "visual_quality": 9,
+                           "audio_text": 9, "pacing_structure": 9, "platform_signals": 9},
+                "vetoes": ["product_wrong_detail"],
+                "issues": [{"cause": "product_wrong_detail", "detail": "标签有乱码", "at": "00:05"}]}]
+        data = {"briefs": [
+            {"id": "A", "title": "系列 A", "takes": [{"id": "A", "attempt": 1, "series": "A", "cost_cny": 1.3, "reviews": bad, "video": "takes/A.mp4"}]},
+            {"id": "A-r2", "title": "系列 A", "takes": [{"id": "A-r2", "attempt": 2, "series": "A", "cost_cny": 1.3, "reviews": good, "video": "takes/A-r2.mp4"}]},
+            {"id": "B", "title": "系列 B", "takes": [{"id": "B", "attempt": 1, "series": "B", "cost_cny": 1.3, "reviews": bad, "video": None}]},
+        ]}
+        p = Path(tmp) / "takes.json"
+        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    def test_series_groups_attempts_and_picks_passing_take(self):
+        import production
+        with tempfile.TemporaryDirectory() as tmp:
+            out = production.build(self._takes(tmp))
+        a = next(s for s in out["series"] if s["id"] == "A")
+        self.assertEqual(a["final"], "A-r2")
+        self.assertEqual([t["id"] for t in a["past"]], ["A"])
+        self.assertEqual(a["past"][0]["grade"], "severe")
+        self.assertEqual(a["stats"]["cost_cny"], 2.6)
+        self.assertEqual(a["stats"]["cost_per_good"], 2.6)     # 两条的钱摊到一条成品上
+        self.assertEqual(a["stats"]["scrap_rate"], 0.5)
+
+    def test_overall_stats_and_no_good_means_no_unit_price(self):
+        import production
+        with tempfile.TemporaryDirectory() as tmp:
+            out = production.build(self._takes(tmp))
+        self.assertEqual((out["stats"]["takes"], out["stats"]["good"], out["stats"]["scrap"]), (3, 1, 2))
+        self.assertEqual(out["stats"]["cost_cny"], 3.9)
+        b = next(s for s in out["series"] if s["id"] == "B")
+        self.assertIsNone(b["stats"]["cost_per_good"])
+
+    def test_series_root_strips_round_suffix_and_follows_parents(self):
+        import loop
+        self.assertEqual(loop.series_root("X-r2", {"X-r2": "X", "X": None}), "X")
+        self.assertEqual(loop.series_root("Y-a3", {}), "Y")
+
+    def test_every_take_appears_in_rendered_board(self):
+        import dashboard
+        import production
+        with tempfile.TemporaryDirectory() as tmp:
+            out = production.build(self._takes(tmp))
+        html_text = dashboard.render({"production": out}, "t")
+        for tid in ("takes/A.mp4", "takes/A-r2.mp4"):
+            self.assertIn(tid, html_text)
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 
