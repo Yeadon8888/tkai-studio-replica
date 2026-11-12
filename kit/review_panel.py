@@ -115,7 +115,7 @@ def run_expert(exp, project_name, take, brief, anchor, refs, frames):
     parts = [{"type": "text", "text": prompt + "\n前面是产品参考图，后面是成片抽帧（按时间顺序）。"}]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in refs]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in frames]
-    text = loop.gemini(parts, project=project_name, ref=f"{take}:{exp['id']}", max_tokens=1400,
+    text = loop.gemini(parts, project=project_name, ref=f"{take}:{exp['id']}", max_tokens=3500,
                        temperature=exp.get("temperature", 0.1), role="review")
     obj = loop.tt.parse_json_obj(text)
     if obj is None:
