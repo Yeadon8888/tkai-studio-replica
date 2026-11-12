@@ -90,7 +90,7 @@ const fmt = v => (v === null || v === undefined || v === '') ? '未提供' : (ty
 const show = (v, suffix='') => (v === null || v === undefined || v === '') ? '未提供' : esc(v) + suffix;
 
 function tabs(){
-  const names = [['research','调研'],['production','生成']];
+  const names = [['research','调研'],['production','生成'],['guide','使用说明']];
   const bar = $('#tabs');
   bar.innerHTML = names.map(([k,n]) => `<button role="tab" aria-selected="${k===state.tab}" data-tab="${k}">${n}</button>`).join('');
   bar.querySelectorAll('button').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; render(); });
@@ -120,6 +120,8 @@ function renderResearch(){
       <div class="thumb">${c.cover ? `<img src="${esc(c.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="" onerror="this.remove()">` : ''}<span class="muted">封面链接可能已过期</span></div>
       <div class="body"><span class="tag">${esc(c.group)}</span>${ok ? '<span class="tag pass">可进入制作</span>' : ''}<h3>${esc(c.title || c.id)}</h3>
       <span class="muted">@${esc(c.author||'未提供')} · 播放 ${fmt(c.metrics?.plays)} · 赞 ${fmt(c.metrics?.likes)}</span>
+      <span class="muted">来源：${c.source === 'manual' ? (c.local_file ? '本地文件 ' + esc(c.local_file) : '手动链接 ' + esc(c.url||'')) : '调研（TikHub）' + (c.url ? ' · ' + esc(c.url) : '')}</span>
+      ${c.source === 'manual' ? `<span class="muted">产品关系：${esc(c.relation || '未说明')}</span>` : ''}
       <label class="pick" data-stop><input type="checkbox" data-sel="${esc(c.id)}" ${checked} ${ok ? '' : 'disabled'}> 选入制作</label>
       ${why}</div></article>`;
   }).join('');
@@ -192,6 +194,30 @@ function statLine(st){
   return {rate, per};
 }
 
+function renderGuide(){
+  const steps = [
+    ['1 找对标', '调研搜到的，或你直接给的视频链接/本地文件。本地文件保存在项目目录外的位置时，请告诉我路径；看板只显示路径，不上传。'],
+    ['2 拆解与定档', 'Agent 按七个维度拆解，给出 H/M/L/X。拆解是推断，同一条可能在相邻两档间浮动，重要对标请你确认档位。'],
+    ['3 选范围', '你选：指定哪几条、指定哪几个档位，或全部。Agent 给出条数、预计金额和缺口，等你确认。'],
+    ['4 起草提示词', 'Agent 判断对标产品与我方产品是否适配（同款 / 适配改写 / 不适配）。不适配的不生成，交给你决定。'],
+    ['5 生成与审判', '按确认的条数生成视频，三位专家逐项判定。通过只表示可以交给你看。'],
+    ['6 修订', '不达标，Agent 按具体问题改提示词，再生成、再审判。到上限或预算用完就停下来问你。'],
+    ['7 你决定', '每一步的"继续、换方向、停止"由你决定。Agent 不会在预算之外付费，也不会降低通过线。'],
+  ];
+  const agentHuman = [
+    ['Agent 会主动问你', '产品卡没确认、预算要超出、对标产品和我方产品是否同类、要不要为一条不达标的成片再花钱。'],
+    ['Agent 不会擅自做', '超预算付费、改通过线或专家标准、同一个任务重复提交、把视频上传到公开地址。'],
+    ['你需要提供', '产品卡与产品锚点、对标的产品关系、本地视频的位置、预算上限（如超过默认 5 元）、选哪些对标或档位。'],
+  ];
+  const stepHtml = steps.map(([t, d]) => `<div class="sec"><h4>${esc(t)}</h4><p>${esc(d)}</p></div>`).join('');
+  const ahHtml = agentHuman.map(([t, d]) => `<div class="sec"><h4>${esc(t)}</h4><p>${esc(d)}</p></div>`).join('');
+  const quote = `<div class="sec"><h4>开工前想问你的（三个）</h4><ul class="iss">
+    <li>每条视频最多重做几轮？建议 2 轮（首次 + 1 次修订）。</li>
+    <li>一个品的预算上限是多少？默认 5 元，约够 3–4 条 10 秒视频。</li>
+    <li>你想要几条成品？需要多设几条时，我会先算出多出来的钱。</li></ul></div>`;
+  return `<p class="muted">这一页说明怎么用这套流程，以及 Agent 与你之间的分工。</p>${stepHtml}<h3 style="font-size:15px">Agent 与你的分工</h3>${ahHtml}${quote}`;
+}
+
 function renderProduction(){
   const P = DATA.production; if(!P){ return '<p class="muted">还没有生成数据。</p>'; }
   const rule = P.rule || {};
@@ -226,7 +252,7 @@ function renderProduction(){
 function render(){
   tabs();
   const body = $('#body');
-  body.innerHTML = state.tab === 'research' ? renderResearch() : renderProduction();
+  body.innerHTML = state.tab === 'research' ? renderResearch() : (state.tab === 'guide' ? renderGuide() : renderProduction());
   body.querySelectorAll('.chip[data-g]').forEach(el => el.onclick = () => { state.group = el.dataset.g; render(); });
   body.querySelectorAll('.chip[data-gf]').forEach(el => el.onclick = () => { state.gfilter = el.dataset.gf; render(); });
   body.querySelectorAll('[data-case]').forEach(el => el.onclick = e => { if (e.target.closest('[data-stop]')) return; openCase(el.dataset.case); });

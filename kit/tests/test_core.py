@@ -529,6 +529,22 @@ class BoardSeries(unittest.TestCase):
             self.assertIn(tid, html_text)
 
 
+class RoundsQuote(unittest.TestCase):
+    def test_worst_case_is_linear_in_rounds(self):
+        import intake
+        q = intake.quote_rounds(10, duration=10, price=0.13, rounds=(1, 2, 3), pass_rate=0.0)
+        self.assertEqual(q[1]["worst_cny"], 13.0)
+        self.assertEqual(q[2]["worst_cny"], 26.0)
+        self.assertEqual(q[3]["worst_cny"], 39.0)
+
+    def test_expected_cost_drops_with_passes(self):
+        import intake
+        q = intake.quote_rounds(10, duration=10, price=0.13, rounds=(1, 3), pass_rate=0.5)
+        self.assertLess(q[3]["expected_cny"], q[3]["worst_cny"])
+        self.assertEqual(q[1]["expected_cny"], 13.0)
+        self.assertEqual(q[3]["expected_good"], 8.75)  # 10 × (1 − 0.5³)
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

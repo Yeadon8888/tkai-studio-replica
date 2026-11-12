@@ -202,6 +202,28 @@ def make_plan(case_list, n, pick=None, tiers=None, use_all=False, max_n=None, pr
             "note": "没有拆解的对标会显示为 X。X 只表示缺数据或不满足复刻条件，先拆解再定档。"}
 
 
+def quote_rounds(n, duration=None, price=None, rounds=(1, 2, 3), pass_rate=0.0):
+    """多轮报价。rounds 表示每条最多生成几轮（首次 + 修订）。
+    最坏情况 = 每条都跑满这么多轮；期望 = 每轮后通过的比例 pass_rate 不再修订。
+    返回每个轮数的 {最坏元, 期望元, 单条成品期望元}。不花钱。"""
+    duration = settings.get_float("VIDEO_DURATION") if duration is None else duration
+    price = settings.video_price() if price is None else price
+    per = duration * price
+    out = {}
+    for r in rounds:
+        worst = n * r * per
+        # 期望：第 k 轮只有未通过的继续；通过率按固定 pass_rate 估算
+        exp, alive = 0.0, float(n)
+        for _ in range(r):
+            exp += alive * per
+            alive *= (1 - pass_rate)
+        good = n * (1 - (1 - pass_rate) ** r)
+        out[r] = {"worst_cny": round(worst, 2), "expected_cny": round(exp, 2),
+                  "expected_good": round(good, 2),
+                  "per_good_cny": round(exp / good, 2) if good else None}
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="手动对标：链接或本地文件 → 拆解 → 定档 → 生成计划")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -221,6 +243,7 @@ def main(argv=None):
     pl.add_argument("--pick", help="指定对标，逗号分隔")
     pl.add_argument("--tiers", help="指定档位，逗号分隔，如 H,M")
     pl.add_argument("--all", action="store_true")
+    pl.add_argument("--pass-rate", type=float, default=0.3, help="估算的单轮通过率，默认 0.3（只用于期望值）")
     a = ap.parse_args(argv)
     pid = a.product
     if a.cmd == "add-file":
@@ -242,6 +265,12 @@ def main(argv=None):
         plan = make_plan(cases(pid), a.n, pick=[x.strip() for x in a.pick.split(",")] if a.pick else None,
                          tiers=[x.strip() for x in a.tiers.split(",")] if a.tiers else None, use_all=a.all)
         import products
+        plan["quote_by_rounds"] = quote_rounds(a.n, pass_rate=a.pass_rate)
+        plan["questions_for_creator"] = [
+            "每条视频最多做几轮（首次 + 修订）？",
+            "这一个品的预算上限是多少？（默认 5 元）",
+            "想要几条成品？多出的条数会在报价里列出费用。",
+        ]
         _write(products.product_dir(pid) / "plan.json", plan)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
     return 0

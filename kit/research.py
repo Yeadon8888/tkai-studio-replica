@@ -66,6 +66,9 @@ def build(out_dir):
                        if v and not v.get("parse_error") else None),
             "risk": (v or {}).get("risk_reason"),
             "final_pass": bool(c.get("final_pass")),
+            "source": c.get("source") or "tiktok",
+            "local_file": c.get("local_file"),
+            "relation": c.get("relation"),
         }
         tier, tier_reasons = replication.classify(case)
         case["tier"] = tier
