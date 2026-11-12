@@ -1,6 +1,13 @@
 # 命令速查
 
-所有命令在 `studio/kit/` 下运行（`cd studio/kit`）。
+所有命令在 `kit/` 下运行（`cd kit`）。模型、价格、上限来自 `.env`，见 `configuration.md`。
+
+## 体检（`doctor.py`）
+
+```bash
+python3 doctor.py            # 本地检查
+python3 doctor.py --online   # 另外确认模型名存在（免费）
+```
 
 ## 品与预算（`products.py`）
 
@@ -55,7 +62,19 @@ python3 own_script.py check --script <脚本.json> --project <品或运行目录
 python3 own_script.py brief --script <脚本.json> --project <运行目录>   # 需要 refs/ 下有产品参考图
 ```
 
-check 通过（无阻塞项）后才能 brief。示例：`studio/methods/tiktok-script-generator/examples/`。
+check 通过（无阻塞项）后才能 brief。示例：`methods/tiktok-script-generator/examples/`。
+
+## 起草、挑错、修订循环
+
+```bash
+python3 draft_prompt.py --brief <简报.json> --project <运行目录> --benchmark <benchmark.json>
+python3 prompt_review.py --script <脚本.json> --project <运行目录> --rounds 3
+python3 refine_loop.py --brief <简报.json> --project <运行目录> --product <品id> --refs <参考图> --attempts 3
+```
+
+- `draft_prompt.py`：H/M/L 初稿。适配判断为 unfit 时不写入，交给人。
+- `prompt_review.py`：X 档脚本的挑错与修改，结果写到 `<脚本>.reviewed.json`，不覆盖原稿。
+- `refine_loop.py`：会真实生成视频并花钱。每一轮先查品预算。
 
 ## 测试
 

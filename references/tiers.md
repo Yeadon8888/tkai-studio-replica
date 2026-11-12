@@ -1,6 +1,6 @@
 # 档位与条数分配
 
-## 档位定义（`studio/kit/replication.py`）
+## 档位定义（`kit/replication.py`）
 
 | 档 | 含义 | 出简报方式 | 保留 | 替换 |
 |---|---|---|---|---|

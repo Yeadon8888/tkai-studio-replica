@@ -37,8 +37,10 @@ import production  # noqa: E402
 import research  # noqa: E402
 import tt_research as tt  # noqa: E402
 
-GEN_MODEL = "minimax-H3"
-GEMINI = "gemini-3.8-flash"
+import settings  # noqa: E402  模型、上限、路径都从 .env 读，见 settings.py
+
+GEN_MODEL = settings.model("video")
+GEMINI = settings.model("text")   # 兼容旧引用；各环节实际用 settings.model(role)
 CST = dt.timezone(dt.timedelta(hours=8))
 
 BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它能否作为产品视频的复刻参考。
@@ -59,25 +61,27 @@ BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它�
  "judgement": {"怎么读": "...", "学到什么": "...", "我们的判断": "...", "对我们": "...", "边界": "..."},
  "risk": "AI 复刻风险一句话"}"""
 
-def gemini(parts, project, ref, max_tokens=1200, temperature=0.1):
-    import limits
-    used = ledger.count_calls(project=project, endpoint=GEMINI)
-    if used >= limits.GEMINI_MAX_CALLS:
-        raise SystemExit(f"Gemini 调用已达上限 {limits.GEMINI_MAX_CALLS}（运行 {project}），停止。")
+def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
+    """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
+    model = settings.model(role)
+    cap = settings.get_int("LIMIT_TEXT_CALLS")
+    used = ledger.count_text_calls(project)
+    if used >= cap:
+        raise SystemExit(f"文本模型调用已达上限 {cap}（运行 {project}），停止。")
     base, key = tt.load_tf_env()
-    body = {"model": GEMINI, "messages": [{"role": "user", "content": parts}],
+    body = {"model": model, "messages": [{"role": "user", "content": parts}],
             "max_tokens": max_tokens, "temperature": temperature}
     req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "User-Agent": tt.TF_UA if hasattr(tt, "TF_UA") else "TokensFactory-Media/1.1"})
+                                          "User-Agent": settings.get("HTTP_USER_AGENT")})
     try:
         with urllib.request.urlopen(req, timeout=240) as r:
             js = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        ledger.append("tokensfactory", GEMINI, e.code, project=project, ref=ref, units=1)
+        ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
         raise
     text = js["choices"][0]["message"]["content"] or ""
-    ledger.append("tokensfactory", GEMINI, "ok", project=project, ref=ref, units=1, usage=js.get("usage") or {})
+    ledger.append(settings.get("TEXT_PROVIDER"), model, "ok", project=project, ref=ref, units=1, usage=js.get("usage") or {}, kind="text")
     return text
 
 
@@ -105,7 +109,7 @@ def cmd_breakdown(a):
             continue
         text = gemini([{"type": "text", "text": BREAKDOWN_PROMPT},
                        {"type": "video_url", "video_url": url}],
-                      project=batch.name, ref=cid, max_tokens=1500)
+                      project=batch.name, ref=cid, max_tokens=1500, role="breakdown")
         obj = tt.parse_json_obj(text)
         if obj is None:
             print(f"{cid} 模型输出无法解析，已记账，原文前 200 字：{text[:200]}")
@@ -144,7 +148,7 @@ def _api(method, path, body=None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(base + path, data=data, method=method,
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "User-Agent": "TokensFactory-Media/1.1"})
+                                          "User-Agent": settings.get("HTTP_USER_AGENT")})
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read().decode("utf-8") or "{}")
 
@@ -278,8 +282,8 @@ def cmd_assemble(a):
     print(f"takes.json 已生成：{len(takes_by_brief)} 个简报")
 
 
-ROOT = Path(__file__).resolve().parents[2]  # 仓库根目录（studio/ 的上一级）
-BOARD_RESEARCH = "research/tiktok-benchmark/20261111-loop-test-A"  # 所有项目的看板统一用同一调研批次
+ROOT = settings.workspace_root()  # 调研批次等相对路径的基准（数据目录的上一级）
+BOARD_RESEARCH = settings.get("BOARD_RESEARCH")  # 所有项目的看板默认用同一调研批次（.env 可改）
 
 
 def cmd_board(a):

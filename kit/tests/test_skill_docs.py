@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
-SKILL = Path.home() / ".claude" / "skills" / "studio-replica" / "references" / "commands.md"
+SKILL = KIT.parent / "references" / "commands.md"
 
 
 def _help(script, args=()):
@@ -18,7 +18,7 @@ def _help(script, args=()):
 class SkillDocsMatchCode(unittest.TestCase):
     def test_every_documented_subcommand_exists(self):
         if not SKILL.exists():
-            self.skipTest("skill 未安装在 ~/.claude/skills/studio-replica")
+            self.fail("references/commands.md 不存在")
         text = SKILL.read_text(encoding="utf-8")
         # 形如 "python3 products.py create ..." 或 "python3 loop.py gen ..."
         pairs = set(re.findall(r"python3 (\w+\.py) ([a-z][a-z-]+)", text))

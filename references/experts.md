@@ -1,14 +1,14 @@
 # 三位专家：分工与标准
 
-权威来源是 `studio/kit/config/experts.yaml`。本文件是摘要，改动以 yaml 为准。
+权威来源是 `kit/config/experts.yaml`。本文件是摘要，改动以 yaml 为准。
 
 ## 分工
 
 | 专家 | 管什么 | 否决项 |
 |---|---|---|
-| **P 产品专家** | 产品是否与参考图一致；三段动作是否齐全、顺序对 | product_wrong_detail、product_deformed、soul_must_keep_missing |
+| **P 产品专家** | 产品是否与参考图一致；简报规定的必须项（`must_keep`）是否齐全、顺序对 | product_wrong_detail、product_deformed、soul_must_keep_missing |
 | **H 人物与肢体专家** | 同一人物全片一致；手指数、手与手腕、第三只手、四肢、脸部扭曲 | person_mismatch |
-| **V 画面与平台专家** | 画面伪影、乱码字；节奏与切点；前三秒留人；口播（本批无口播则不评） | compliance_fail（乱码字） |
+| **V 画面与平台专家** | 画面伪影、乱码字；节奏与切点；前三秒留人；口播（无口播不评；有口播时抽帧听不到，标"需人工听"） | compliance_fail（乱码字） |
 
 ## 判定方式
 

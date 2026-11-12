@@ -45,7 +45,6 @@ DRAFT_TEMPLATE = """你是视频提示词起草员。目标：为我方产品写
 5. 不超过 {max_chars} 字符。
 """
 
-FIXED_KEYWORDS = ("crouch", "dip", "compare", "pool", "daylight", "handheld", "vertical")
 
 
 def build(brief, anchor, benchmark_text, fixed_text, variant_text):
@@ -63,10 +62,11 @@ def _parse(text):
     return json.loads(s[s.find("{"): s.rfind("}") + 1])
 
 
-def check_draft(prompt, anchor, baseline_prompt):
-    """硬约束：基础检查 + 固定项关键词在骨架里出现过的，草稿里也要保留（防止动作被改掉）。"""
+def check_draft(prompt, anchor, baseline_prompt, keywords=()):
+    """硬约束：基础检查 + 简报给出的固定项关键词（fixed_keywords）在骨架里出现过的，草稿里也要保留。
+    关键词来自对标/简报，不写死在代码里；没有给关键词时只做基础检查。"""
     errs = check_revision(prompt, anchor)
-    base_hits = {k for k in FIXED_KEYWORDS if k in (baseline_prompt or "").lower()}
+    base_hits = {k.lower() for k in keywords if k.lower() in (baseline_prompt or "").lower()}
     lost = [k for k in base_hits if k not in (prompt or "").lower()]
     if lost:
         errs.append("固定项关键词丢失：" + ", ".join(sorted(lost)))
@@ -83,7 +83,7 @@ def draft(brief, anchor, benchmark_text, fixed_text, variant_text, llm):
         except (ValueError, KeyError):
             last = ["模型输出不是有效 JSON"]
             continue
-        last = check_draft(js.get("prompt", ""), anchor, baseline)
+        last = check_draft(js.get("prompt", ""), anchor, baseline, brief.get("fixed_keywords") or ())
         if not last:
             out = dict(brief, prompt=js["prompt"], prompt_baseline=baseline,
                        draft_fit=js.get("fit", "adapt"), draft_notes=js.get("fit_notes", ""))
@@ -111,7 +111,7 @@ def main(argv=None):
 
     def llm(prompt):
         return loop.gemini([{"type": "text", "text": prompt}], project=f"draft-{brief['id']}", ref="draft",
-                           max_tokens=1600, temperature=0.3)
+                           max_tokens=1600, temperature=0.3, role="draft")
 
     out, errs = draft(brief, anchor, bench_text, fixed_text, variant_text, llm)
     if out is None:

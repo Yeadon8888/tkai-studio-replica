@@ -7,26 +7,28 @@ import datetime as dt
 import json
 from pathlib import Path
 
-LEDGER_DIR = Path(__file__).resolve().parents[1] / "ledger"
+import settings  # noqa: E402
+
+LEDGER_DIR = settings.studio_home() / "ledger"
 LEDGER_FILE = LEDGER_DIR / "costs.jsonl"
 
 
 # 单价（人民币）。只有确认过的价格才写进来；未知的端点估算为 None，不编造。
 # minimax-H3：0.13 元 / 请求秒（CLAUDE.md 中的模型表）。
-PRICES_CNY = {"minimax-H3": 0.13}
+PRICES_CNY = {"minimax-H3": 0.13}  # 历史价格，保证旧账本行的估算不变；当前视频模型的价格来自 .env
 
 
 def estimate_cny(endpoint, units, status):
     """提交行按单位数估算金额；终态行（saved/failed）金额为 0，避免重复计费。"""
     if str(status) in ("saved", "failed"):
         return 0.0
-    price = PRICES_CNY.get(endpoint)
+    price = settings.video_price() if endpoint == settings.model("video") else PRICES_CNY.get(endpoint)
     if price is None or not units:
         return None
     return round(price * float(units), 4)
 
 
-def append(provider, endpoint, status, project="", ref="", units=None, usage=None):
+def append(provider, endpoint, status, project="", ref="", units=None, usage=None, kind=None):
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     row = {
         "time": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -38,6 +40,7 @@ def append(provider, endpoint, status, project="", ref="", units=None, usage=Non
         "units": units,              # 计费单位数（TikHub 为 1 次请求；视频为秒）
         "usage": usage or {},        # 模型 token 用量等
         "estimate_cny": estimate_cny(endpoint, units, status),  # 估算金额，未知为 None
+        "kind": kind,                # text | video | search（旧行没有此字段）
     }
     with LEDGER_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -67,5 +70,20 @@ def count_calls(project, endpoint):
     for line in LEDGER_FILE.read_text(encoding="utf-8").splitlines():
         r = json.loads(line)
         if r.get("project") == project and r.get("endpoint") == endpoint and r.get("units"):
+            n += 1
+    return n
+
+
+def count_text_calls(project):
+    """某运行的文本模型请求数（含失败），用于 LIMIT_TEXT_CALLS。新行看 kind，旧行按模型名识别。"""
+    if not LEDGER_FILE.exists():
+        return 0
+    names = settings.text_models() | {"gemini-3.8-flash"}
+    n = 0
+    for line in LEDGER_FILE.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("project") != project or not r.get("units"):
+            continue
+        if r.get("kind") == "text" or (r.get("kind") is None and r.get("endpoint") in names):
             n += 1
     return n

@@ -44,17 +44,16 @@ experts:
       【product_consistency 检查清单】每项都要逐项判定，并给时间码：
       1. label_text：产品标签上只有参考图里有的内容。出现多余的字、乱码、品牌名、贴纸，判失败。 cause=product_wrong_detail
       2. colour_shape：瓶身颜色、透明度、形状、瓶盖与参考图一致。颜色明显不同或形状变化，判失败。 cause=product_wrong_detail
-      3. strip_count：试纸的数量、颜色与参考图一致；不能多出或少掉。 cause=product_wrong_detail
+      3. parts_count：产品的部件、配件的数量与颜色和参考图一致；不能多出或少掉。 cause=product_wrong_detail
       4. no_deformation：产品不融化、不拉伸、不多出或缺少部件、不在手里"变形"。 cause=product_deformed
       5. visible_time：产品在画面中清楚可见的时间累计不少于 7 秒（不清楚的帧不算）。不足判失败。 cause=product_wrong_detail
       6. hand_grip：拿瓶的位置在合理的手指范围内，产品没有穿过手。（手的细节由 H 专家判，这里只看产品与手的关系） cause=product_deformed
 
-      【soul_fidelity 检查清单】简报规定三段动作，顺序必须对：
-      A. 蹲下并把瓶子举起对准镜头
-      B. 把试纸浸入水杯
-      C. 转动瓶子或试纸，对照色卡
-      缺任何一段，判失败，cause=soul_must_keep_missing，并标注"缺少哪一段、应该在什么时间出现"。
+      【soul_fidelity 检查清单】这条简报规定的必须项（按顺序）：
+      {must_keep}
+      逐条判定。缺任何一条，判失败，cause=soul_must_keep_missing，并标注"缺少哪一条、应该在什么时间出现"。
       顺序错误也判失败，cause=soul_must_keep_missing。
+      只按上面列出的必须项判断，不要自己假设别的动作。
 
       【cause 可用值】product_wrong_detail、product_deformed、soul_must_keep_missing
       【否决】出现 product_wrong_detail、product_deformed、soul_must_keep_missing 中任一项失败，且失败明显时，填入 vetoes。
@@ -71,8 +70,8 @@ experts:
       输出格式（严格 JSON）：
       {"judge": "P",
        "scores": {"product_consistency": 0, "soul_fidelity": 0},
-       "checks": {"product_consistency": {"label_text": "通过|失败|看不清", "colour_shape": "...", "strip_count": "...", "no_deformation": "...", "visible_time": "...", "hand_grip": "..."},
-                  "soul_fidelity": {"A": "...", "B": "...", "C": "...", "order": "..."}},
+       "checks": {"product_consistency": {"label_text": "通过|失败|看不清", "colour_shape": "...", "parts_count": "...", "no_deformation": "...", "visible_time": "...", "hand_grip": "..."},
+                  "soul_fidelity": {"1": "...", "2": "...", "order": "..."}},
        "vetoes": [],
        "issues": [{"cause": "product_wrong_detail", "detail": "哪里、什么样子", "at": "00:05"}],
        "notes": "一两句总结，不要重复 issues"}
@@ -125,7 +124,7 @@ experts:
     dimensions: [visual_quality, pacing_structure, platform_signals, audio_text]
     temperature: 0.1
     focus: |
-      【职责】画面伪影与乱码字；节奏与切点；前三秒留人；口播（本批没有口播，写"无口播，不评"并给 10 分）。
+      【职责】画面伪影与乱码字；节奏与切点；前三秒留人；口播。
 
       【visual_quality 检查清单（画面，不含手和肢体）】
       1. flicker：画面不闪烁、不抖动超出手持镜头的正常范围。 cause=motion_artifact
@@ -134,15 +133,16 @@ experts:
       4. smear：没有明显的涂抹、重影、色块。 cause=motion_artifact
 
       【pacing_structure 检查清单】
-      5. beats：能清楚分出三个段落（A 举瓶 / B 浸试纸 / C 对照色卡），切点清楚。 cause=pacing_off
-      6. duration：全片约 10 秒，三段的时长大致平均，没有一段明显过长。 cause=pacing_off
+      5. beats：能清楚分出简报规定的各段（见下），切点清楚。 cause=pacing_off
+         {must_keep}
+      6. duration：全片约 {duration} 秒，各段时长大致平均，没有一段明显过长。 cause=pacing_off
 
       【platform_signals 检查清单（启发式代理分，不是真实算法）】
-      7. hook：前 3 秒内产品清楚入画，人物朝向镜头。 cause=weak_hook
+      7. hook：前 3 秒能抓住注意力（人物朝向镜头，或画面有明确的问题、动作、结果）。简报要求产品先出现时，产品要清楚入画。 cause=weak_hook
       8. rhythm：每 2–4 秒画面有一次变化（动作或机位）。长时间静止判失败。 cause=weak_hook
-      9. ending：结尾停在可以看清的结果上（色卡可读），不是突然切断。 cause=weak_hook
+      9. ending：结尾停在可以看清的结果上，不是突然切断。 cause=weak_hook
 
-      【audio_text】本批没有口播，写 "无口播，不评"，给 10 分，不列 issues。
+      【audio_text】{audio_rule}
 
       【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync
       【否决】compliance_fail（乱码字）明显时，填入 vetoes。

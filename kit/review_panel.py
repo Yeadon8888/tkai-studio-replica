@@ -78,14 +78,35 @@ def frame_times(n, duration):
     return ", ".join(out)
 
 
+NO_MUST_KEEP = "（简报没有列出必须项：只按简报摘要判断，无法判断的写'看不清'，不要自己假设动作顺序）"
+AUDIO_NONE = "简报没有口播：写 \"无口播，不评\"，给 10 分，不列 issues。"
+AUDIO_HAS = ("简报有口播，但你只看得到抽帧、听不到声音：audio_text 给 7 分，"
+             "并写一条 issue（cause=audio_sync，detail=\"有口播，需人工听\"，at 取第一帧时间）。")
+
+
+def must_keep_text(brief):
+    """必须项来自简报本身：must_keep（列表）优先；自写脚本用各镜头动作；都没有则明说没有。"""
+    items = brief.get("must_keep")
+    if not items and isinstance(brief.get("script"), dict):
+        items = [f"{s.get('start')}–{s.get('end')}s：{s.get('action_zh') or s.get('scene_zh') or ''}"
+                 for s in brief["script"].get("shots", [])]
+    if not items:
+        return NO_MUST_KEEP
+    return "\n      ".join(f"{i + 1}. {x}" for i, x in enumerate(items))
+
+
 def _expert_prompt(exp, brief, anchor, frame_times_text=""):
     shared = exp.get("shared_rules", "")
+    focus = (exp["focus"].strip()
+             .replace("{must_keep}", must_keep_text(brief))
+             .replace("{duration}", f"{float(brief.get('duration', 10)):g}")
+             .replace("{audio_rule}", AUDIO_HAS if brief.get("voiceover") else AUDIO_NONE))
     return (exp["prompt"]
             .replace("{brief}", (brief.get("summary") or brief.get("prompt", ""))[:800])
             .replace("{anchor}", anchor or "（简报未提供锚点）")
             .replace("{frame_times}", frame_times_text or "（未提供）")
             .replace("{shared_rules}", shared.strip())
-            .replace("{focus}", exp["focus"].strip()))
+            .replace("{focus}", focus))
 
 
 def run_expert(exp, project_name, take, brief, anchor, refs, frames):
@@ -95,7 +116,7 @@ def run_expert(exp, project_name, take, brief, anchor, refs, frames):
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in refs]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in frames]
     text = loop.gemini(parts, project=project_name, ref=f"{take}:{exp['id']}", max_tokens=1400,
-                       temperature=exp.get("temperature", 0.1))
+                       temperature=exp.get("temperature", 0.1), role="review")
     obj = loop.tt.parse_json_obj(text)
     if obj is None:
         return None
@@ -111,7 +132,8 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     attempt = brief.get("attempt", 1)
     anchor = brief.get("product_anchor") or _anchor_from_refs(project)
     mc = machine_checks(video, brief)
-    record = {"take": take, "attempt": attempt, "machine": mc, "experts": []}
+    import settings
+    record = {"take": take, "attempt": attempt, "machine": mc, "experts": [], "versions": settings.stamp()}
     if mc["blocking"]:
         # 计算型阻塞：不花钱调用专家，直接退回生成
         decision = {"attempt": attempt, "decision": "repair", "stage": "glitches", "retry_from": "generate",

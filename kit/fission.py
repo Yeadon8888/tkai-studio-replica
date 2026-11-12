@@ -29,8 +29,10 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import replication  # noqa: E402
 
-CNY_PER_SECOND = 0.13  # minimax-H3，见 CLAUDE.md（每请求秒）
-MAX_N = 5              # 单批上限；超过需先确认预算
+import settings  # noqa: E402
+
+CNY_PER_SECOND = settings.video_price()      # .env：VIDEO_PRICE_CNY_PER_SECOND
+MAX_N = settings.get_int("FISSION_MAX_N")    # 单个对标的单批上限；超过需先确认预算
 
 VARY_ALLOWED = {
     "H": {"person", "product"},
@@ -73,7 +75,7 @@ def check_inputs(bench, dirs, tier):
 
 # 按置信度分配一批的总条数：高档多、低档少。默认 H:M:L:X = 4:3:2:1。
 # X 不裂变，走自写脚本（own_script.py），不依赖对标，容量不设上限。
-TIER_WEIGHTS = {"H": 4, "M": 3, "L": 2, "X": 1}
+TIER_WEIGHTS = settings.tier_weights()  # .env：TIER_WEIGHTS，默认 H:4,M:3,L:2,X:1
 
 
 def allocate(n, available, weights=None):
@@ -187,6 +189,10 @@ def fission(bench, dirs, out_dir, n=None):
             "prompt": build_prompt(bench, v),
             "attempt": 1,
             "variant": v,
+            # 审判与起草都读这两项，不再在专家提示词里写死动作
+            "must_keep": bench.get("must_keep") or [x for x in [(bench.get("fixed") or {}).get("action"), (bench.get("fixed") or {}).get("rhythm")] if x],
+            "fixed_keywords": bench.get("fixed_keywords", []),
+            "voiceover": bool(bench.get("voiceover")),
         }
         if bench.get("test_only"):
             brief["summary"] = "【测试，非真实档位】" + brief["summary"]

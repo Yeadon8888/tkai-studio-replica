@@ -18,10 +18,13 @@ import sys
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
-STUDIO = KIT.parent
+sys.path.insert(0, str(KIT))
+import settings  # noqa: E402
+
+STUDIO = settings.studio_home()
 PRODUCTS = STUDIO / "products"
 QUEUE = PRODUCTS / "_queue.json"
-DEFAULT_BUDGET_CNY = 5.0
+DEFAULT_BUDGET_CNY = settings.get_float("PRODUCT_BUDGET_CNY")  # .env：PRODUCT_BUDGET_CNY
 STAGES = ["scope", "research", "breakdown", "brief", "generate", "review", "board", "done"]
 
 

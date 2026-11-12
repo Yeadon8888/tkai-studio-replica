@@ -23,7 +23,9 @@ sys.path.insert(0, str(KIT))
 
 import products  # noqa: E402
 
-COST_PER_SECOND = 0.13  # minimax-H3，见 CLAUDE.md
+import settings  # noqa: E402
+
+COST_PER_SECOND = settings.video_price()  # .env：VIDEO_PRICE_CNY_PER_SECOND
 MAX_PROMPT_CHARS = 1500
 
 
@@ -190,7 +192,7 @@ def main(argv=None):
     ap.add_argument("--product", required=True, help="品 id（用于预算检查）")
     ap.add_argument("--refs", required=True, help="产品参考图，逗号分隔")
     ap.add_argument("--fixed", default="", help="固定项说明（动作、场景、机位、节奏）")
-    ap.add_argument("--attempts", type=int, default=3)
+    ap.add_argument("--attempts", type=int, default=settings.get_int("REFINE_MAX_ATTEMPTS"))
     a = ap.parse_args(argv)
     import loop
     import review_panel
@@ -206,7 +208,7 @@ def main(argv=None):
 
     def llm(prompt):
         return loop.gemini([{"type": "text", "text": prompt}], project=f"refine-{base['id']}", ref="revise",
-                           max_tokens=1600, temperature=0.3)
+                           max_tokens=1600, temperature=0.3, role="revise")
 
     refs = [r for r in a.refs.split(",") if r.strip()]
     res = run(base, project, a.product, refs, gen, review, llm, anchor, a.fixed, a.attempts)

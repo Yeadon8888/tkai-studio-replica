@@ -119,6 +119,7 @@ def to_brief(script, project, anchor, sid=None):
         "product_anchor": anchor,
         "prompt": f"Use image 1 as the exact product reference: {anchor}. {prompt}",
         "script": script,
+        "voiceover": any((s.get("line") or "").strip() for s in script["shots"]),
     }
 
 

@@ -38,7 +38,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ledger as studio_ledger  # noqa: E402  统一账本
 
-BASE = "https://api.tikhub.io"
+import settings  # noqa: E402  读 .env，并把密钥放进进程环境
+
+settings.load()
+BASE = settings.get("TIKHUB_BASE_URL")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -59,10 +62,8 @@ OUTLIER_DEFAULTS = {
 
 HASHTAG_REGIONS = {"US", "GB", "FR", "JP", "VN", "SG"}
 
-DEFAULT_ENV_FILES = [
-    "~/.config/tikhub/credentials.env",
-    "/Users/yeadon_1/Desktop/MyProject/tkAI视频增长中台/content-dashboard-next/.local-secrets/glumoo-tikhub.env",
-]
+# 密钥文件位置在 .env 的 CREDENTIALS_FILES 里配置；这里只保留一个通用的兜底位置。
+DEFAULT_ENV_FILES = ["~/.config/tikhub/credentials.env"]
 CST = dt.timezone(dt.timedelta(hours=8))
 
 
@@ -644,9 +645,9 @@ def cmd_intake(a, client):
 
 # ---------------------------------------------------------------- AI 验证（TokensFactory，只传公开链接）
 
-TF_DEFAULT_BASE = "https://tokensfactory.cc"
-TF_UA = "TokensFactory-Media/1.1"
-VERIFY_MODEL = "gemini-3.8-flash"
+TF_DEFAULT_BASE = settings.get("TOKENSFACTORY_BASE_URL")
+TF_UA = settings.get("HTTP_USER_AGENT")
+VERIFY_MODEL = settings.model("verify")
 VERIFY_PROMPT = """你在审核一条 TikTok 视频，判断它能否作为下面产品的对标素材。
 只依据视频画面和声音作答。看不清或听不清的写 unclear 或 null，不要编造。
 
@@ -1031,7 +1032,7 @@ def main():
     it = sub.add_parser("intake", parents=[common], help="校验产品任务卡 product_card.json")
     it.add_argument("--card", help="任务卡路径，默认 <out>/product_card.json")
 
-    v = sub.add_parser("verify", parents=[common], help="gemini-3.8-flash 验证入选视频（公开链接，不下载）")
+    v = sub.add_parser("verify", parents=[common], help="用 .env 的 MODEL_VERIFY 验证入选视频（公开链接，不下载）")
     v.add_argument("--ids", help="候选编号，逗号分隔，如 C001,C003")
     v.add_argument("--top", type=int, default=5, help="按自动分取前 N 条入选视频")
     v.add_argument("--include-weak", action="store_true", help="同时验证待复核条目")

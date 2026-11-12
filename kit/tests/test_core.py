@@ -363,8 +363,63 @@ class DraftPrompt(unittest.TestCase):
 
     def test_rejects_draft_that_drops_fixed_action(self):
         import draft_prompt as dp
-        errs = dp.check_draft("Use image 1: " + self.ANCHOR + ". stand still and talk. daylight, handheld, vertical", self.ANCHOR, self.BASE)
+        errs = dp.check_draft("Use image 1: " + self.ANCHOR + ". stand still and talk. daylight, handheld, vertical", self.ANCHOR, self.BASE,
+                              keywords=["crouch", "dip", "compare"])
         self.assertTrue(any("固定项" in e for e in errs))
+
+
+class Decoupling(unittest.TestCase):
+    def test_env_file_overrides_models_and_price(self):
+        import os
+        import settings
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("MODEL_TEXT=text-x\nMODEL_REVIEW=review-y\nMODEL_VIDEO=video-z\nVIDEO_PRICE_CNY_PER_SECOND=0.5\nCREDENTIALS_FILES=\n", encoding="utf-8")
+            old = os.environ.get("STUDIO_ENV")
+            os.environ["STUDIO_ENV"] = str(env)
+            try:
+                settings.load(force=True)
+                self.assertEqual(settings.model("draft"), "text-x")     # 没单独配置的环节沿用 MODEL_TEXT
+                self.assertEqual(settings.model("review"), "review-y")
+                self.assertEqual(settings.model("video"), "video-z")
+                import ledger
+                self.assertEqual(ledger.estimate_cny("video-z", 10, "submitted"), 5.0)
+                self.assertEqual(ledger.estimate_cny("minimax-H3", 10, "submitted"), 1.3)  # 历史行不变
+            finally:
+                if old is None:
+                    os.environ.pop("STUDIO_ENV", None)
+                else:
+                    os.environ["STUDIO_ENV"] = old
+                settings.load(force=True)
+
+    def test_expert_prompt_uses_brief_must_keep_not_hardcoded_actions(self):
+        import review_panel as rp
+        cfg = rp.load_experts()
+        brief = {"summary": "s", "duration": 20, "must_keep": ["先展示脏水", "再倒入滤芯"], "voiceover": True}
+        for exp in cfg["experts"]:
+            p = rp._expert_prompt(exp, brief, "锚点", "f01=00:00.0")
+            self.assertNotIn("试纸浸入水杯", p)
+            self.assertNotIn("{must_keep}", p)
+            self.assertNotIn("{audio_rule}", p)
+        p_prod = rp._expert_prompt(cfg["experts"][0], brief, "锚点", "")
+        self.assertIn("先展示脏水", p_prod)
+        p_vis = rp._expert_prompt(cfg["experts"][2], brief, "锚点", "")
+        self.assertIn("需人工听", p_vis)
+        self.assertIn("20 秒", p_vis)
+
+    def test_no_personal_paths_or_model_names_hardcoded_outside_settings(self):
+        bad = []
+        for f in sorted((Path(__file__).resolve().parents[1]).glob("*.py")):
+            if f.name == "settings.py":
+                continue
+            text = f.read_text(encoding="utf-8")
+            if "/Users/" in text:
+                bad.append(f"{f.name}: 个人路径")
+            for line in text.splitlines():
+                code = line.split("#")[0]
+                if ('"gemini-' in code or '"minimax-' in code) and "PRICES_CNY" not in code and "names =" not in code:
+                    bad.append(f"{f.name}: {line.strip()[:60]}")
+        self.assertEqual(bad, [])
 
 
 class OwnScriptChecks(unittest.TestCase):

@@ -116,7 +116,7 @@ def main(argv=None):
     project_name = "prompt-review-" + script.get("id", "script")
 
     def llm(prompt):
-        return loop.gemini([{"type": "text", "text": prompt}], project=project_name, ref="critic", max_tokens=2000)
+        return loop.gemini([{"type": "text", "text": prompt}], project=project_name, ref="critic", max_tokens=2000, role="critic")
 
     out, hist = run(script, anchor, llm, a.rounds, log_path=LOG_DIR / f"{script.get('id', 'script')}.jsonl")
     dst = Path(a.script).with_suffix(".reviewed.json")
