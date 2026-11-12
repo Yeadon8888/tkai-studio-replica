@@ -1,4 +1,4 @@
-"""本地视频 → 临时公网地址 → 给 Gemini 整条拆解 → 删除。
+"""本地视频 → 临时公网地址 → 给理解模型整条拆解或评审 → 删除。
 
 为什么：Gemini 读视频只接受公网 HTTP(S) 地址。抽帧只是绕开限制，会丢细节，不作为默认做法。
 
@@ -6,7 +6,7 @@
 - 只在用户已经说明可以上传这个视频时使用（默认 MEDIA_UPLOAD=github_temp 视为已授权上传"对标视频"这一类）。
 - 上传到用户自己 GitHub 账号下的专用公开仓库（MEDIA_HOST_REPO，必须在 .env 里设置），
   不使用任何网页上的访问码，也不使用其他人的图床。
-- 拆解完成后立即删除该文件，并把删除结果记入 media_log.jsonl。删除失败要告诉用户。
+- 拆解或评审完成后立即删除该文件，并把删除结果记入 media_log.jsonl。删除失败要告诉用户。
 - 只上传视频，不上传封面、不上传运行日志。
 - MEDIA_UPLOAD=off 时拒绝上传，本地视频只能用抽帧（会注明"细节不完整"）。
 """
@@ -59,7 +59,7 @@ def upload(local, repo=None):
     import hashlib
     digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     path = f"clips/{digest}{p.suffix.lower()}"
-    payload = {"message": "temp clip for breakdown", "content": base64.b64encode(p.read_bytes()).decode()}
+    payload = {"message": "temp clip for model review", "content": base64.b64encode(p.read_bytes()).decode()}
     try:  # 同一内容已存在时（同一个 sha256 文件名），更新需要带上旧文件的 sha
         payload["sha"] = _gh([f"repos/{repo}/contents/{path}"])["sha"]
     except RuntimeError:

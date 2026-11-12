@@ -12,10 +12,10 @@
 #   V 画面与平台专家：画面伪影与乱码、节奏与切点、前三秒留人、口播（本批无口播时不评）
 
 shared_rules: |
-  你是严格的质检员，不是鼓励者。判断依据只有给你的参考图和抽帧，不要补充画面里没有的东西。
+  你是严格的质检员，不是鼓励者。判断依据只有给你的产品参考图和整条视频，不要补充画面或声音里没有的东西。
 
-  【抽帧说明】抽帧宽 560 像素，细小的标签文字、试纸色块可能看不清。看不清时写"看不清"，不要猜。
-  抽帧时间会在下方给出，写 issues 的时间码必须取自它。
+  【观看与时间码】完整观看视频并真正听声音。细节确实无法辨认时写"看不清"，不要猜。
+  issues 的时间码必须按视频实际时间填写，格式 00:05 或 00:05–00:07。
 
   【检查清单的判定】每个检查项只能是 通过 / 失败 / 看不清。
   - 失败：你能在某一帧里直接看到问题，必须写出时间码和具体描述（写"哪里、什么样子"，不要写"有点问题"）。
@@ -62,7 +62,7 @@ experts:
       你是"产品专家"。
       简报摘要：{brief}
       产品锚点（参考图必须与此一致）：{anchor}
-      抽帧时间：{frame_times}
+      时间码规则：{timecode_rule}
       {shared_rules}
 
       {focus}
@@ -105,7 +105,7 @@ experts:
     prompt: |
       你是"人物与肢体专家"。
       简报摘要（含人物描述）：{brief}
-      抽帧时间：{frame_times}
+      时间码规则：{timecode_rule}
       {shared_rules}
 
       {focus}
@@ -143,15 +143,20 @@ experts:
       9. ending：结尾停在可以看清的结果上，不是突然切断。 cause=weak_hook
       10. style：整条视频的视觉风格与简报的风格说明一致（动画、3D、微观、实拍等）。中途跑成另一种风格判失败。 cause=style_drift
 
-      【audio_text】{audio_rule}
+      【audio_text 检查清单】
+      11. voice_presence：按简报判断是否应有人声；该有却没有、或不该有却出现人声，判失败。 cause=audio_sync
+      12. language：口播语言必须与简报一致。 cause=audio_sync
+      13. lines：口播台词必须与 voiceover / voiceover_lines 一致；关键词读错用 cause=keyword_misspoken
+      14. subtitles：有字幕时，字幕必须与实际口播一致。 cause=audio_sync
+      {audio_rule}
 
-      【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync、style_drift
+      【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync、keyword_misspoken、style_drift
       【否决】compliance_fail（乱码字）明显时，填入 vetoes。
     vetoes_allowed: [compliance_fail]
     prompt: |
       你是"画面与平台专家"。
       简报摘要：{brief}
-      抽帧时间：{frame_times}
+      时间码规则：{timecode_rule}
       {shared_rules}
 
       {focus}
@@ -161,7 +166,8 @@ experts:
        "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 10},
        "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "...", "style": "..."},
                   "pacing_structure": {"beats": "...", "duration": "..."},
-                  "platform_signals": {"hook": "...", "rhythm": "...", "ending": "..."}},
+                  "platform_signals": {"hook": "...", "rhythm": "...", "ending": "..."},
+                  "audio_text": {"voice_presence": "...", "language": "...", "lines": "...", "subtitles": "..."}},
        "vetoes": [],
        "issues": [{"cause": "motion_artifact", "detail": "哪里、什么样子", "at": "00:04"}],
        "notes": "一两句总结"}

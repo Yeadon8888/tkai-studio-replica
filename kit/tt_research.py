@@ -711,13 +711,10 @@ def media_reachable(url):
 
 
 def parse_json_obj(text):
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except ValueError:
-        return None
+    """兼容旧调用名；JSON 解析实现统一在 common.parse_json。"""
+    from common import parse_json
+    value = parse_json(text)
+    return value if isinstance(value, dict) else None
 
 
 def cmd_verify(a):

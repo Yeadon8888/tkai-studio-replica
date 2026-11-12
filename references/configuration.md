@@ -37,10 +37,20 @@ VIDEO_ASPECT=9:16
 PRODUCT_BUDGET_CNY=5          # 每个品的默认预算
 LIMIT_TIKHUB_CALLS=100        # 单次查询的请求上限
 LIMIT_TEXT_CALLS=100          # 单个运行的文本模型请求上限
-REFINE_MAX_ATTEMPTS=3         # 生成—审判—修订循环的轮数
+MAX_ATTEMPTS=3                # 生成—审判—修订循环的唯一轮数上限
+REVIEW_MAX_TOKENS=2000        # 每位专家评审的输出 token 上限
 TIER_WEIGHTS=H:4,M:3,L:2,X:1  # 条数分配权重
 FISSION_MAX_N=5               # 单个对标一批最多几条
 ```
+
+旧配置 `REFINE_MAX_ATTEMPTS` 仍可读取，但只作兼容别名；新配置统一写 `MAX_ATTEMPTS`。
+
+**整条视频评审与临时上传**
+```
+MEDIA_UPLOAD=github_temp      # 无可用 remote_url 时临时上传，评审后删除
+MEDIA_HOST_REPO=owner/repo    # 用户自己的公开临时媒体仓库
+```
+设为 `MEDIA_UPLOAD=off` 时，如果任务记录也没有可访问的 `remote_url`，评审回退到抽帧并记录 `mode: frames`。
 
 **密钥**
 推荐只在 `.env` 里写密钥文件的路径：

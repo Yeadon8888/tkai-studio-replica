@@ -1,10 +1,9 @@
 # Gemini 自检评分表。总分只用来排序；通过与否由"逐项下限 + 硬否决"决定。
 version: 1
-max_attempts: 5
+# 自动轮数上限已迁移到 .env 的 MAX_ATTEMPTS，由 gate.py 与 refine_loop.py 统一读取。
 pass:
   weighted_min: 8.0          # 加权总分下限
   dimension_floor: 6.5       # 任何一项低于它 = 不通过
-  second_judge: true         # 开启时两次评分逐项取较低值（对冲 Gemini 偏宽松）
 dimensions:
   soul_fidelity:       {weight: 0.20, check: "钩子类型、情绪曲线、信息顺序、转化动作与灵魂卡一致；must_keep 项逐条出现", evidence: [soul_must_keep_missing, client_requirement_unmet]}
   product_consistency: {weight: 0.25, check: "形状/颜色/材质/关键细节与产品参考图一致；不变形、不无中生有", evidence: [product_wrong_detail, product_deformed, client_requirement_unmet]}
@@ -48,8 +47,6 @@ compliance:
   C6: "口播与字幕不出现被禁渠道名，结尾转化句按用户原话"
   C7: "没有乱码文字、画面里不该有的字幕"
   C8: "AI 生成内容按平台要求可标注"
-escalate_after_attempts: 5   # 第 5 次仍不过 → 停止自动重做，交给人，并附上五轮对比
-
 # 评审顺序（流程化规范）：先查一致性，再查穿帮，最后查交付质量。
 # 上游阶段不过，下游只记录不作为修复依据——一致性都错了，修穿帮没有意义。
 stages:

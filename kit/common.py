@@ -2,6 +2,7 @@
 import base64
 import datetime as dt
 import json
+import re
 from pathlib import Path
 
 CST = dt.timezone(dt.timedelta(hours=8))
@@ -24,3 +25,18 @@ def _data_uri(path):
     p = Path(path)
     mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}[p.suffix.lower()]
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
+
+
+def parse_json(text):
+    """从模型输出中取出第一个完整 JSON 值；支持代码围栏和前后说明，失败返回 None。"""
+    if not isinstance(text, str):
+        return None
+    s = re.sub(r"```(?:json)?\s*", "", text, flags=re.I).replace("```", "")
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"[\[{]", s):
+        try:
+            value, _ = decoder.raw_decode(s[match.start():])
+            return value
+        except ValueError:
+            continue
+    return None

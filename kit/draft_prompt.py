@@ -21,6 +21,7 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 from refine_loop import check_revision, MAX_PROMPT_CHARS  # noqa: E402
+from common import parse_json  # noqa: E402
 
 DRAFT_TEMPLATE = """你是视频提示词起草员。目标：为我方产品写一条 AI 视频生成的提示词（英文，给 MiniMax H3）。
 
@@ -53,15 +54,6 @@ def build(brief, anchor, benchmark_text, fixed_text, variant_text):
                                  max_chars=MAX_PROMPT_CHARS)
 
 
-def _parse(text):
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s.lower().startswith("json"):
-            s = s[4:]
-    return json.loads(s[s.find("{"): s.rfind("}") + 1])
-
-
 def check_draft(prompt, anchor, baseline_prompt, keywords=()):
     """硬约束：基础检查 + 简报给出的固定项关键词（fixed_keywords）在骨架里出现过的，草稿里也要保留。
     关键词来自对标/简报，不写死在代码里；没有给关键词时只做基础检查。"""
@@ -79,7 +71,9 @@ def draft(brief, anchor, benchmark_text, fixed_text, variant_text, llm):
     last = []
     for _ in range(2):
         try:
-            js = _parse(llm(prompt))
+            js = parse_json(llm(prompt))
+            if not isinstance(js, dict):
+                raise ValueError
         except (ValueError, KeyError):
             last = ["模型输出不是有效 JSON"]
             continue
