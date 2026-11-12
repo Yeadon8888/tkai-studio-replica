@@ -17,6 +17,10 @@ import json
 from pathlib import Path
 
 import gate
+import ledger
+
+HUMAN_TO_EXPERT = {"accept": "pass", "release": "pass", "iterate": "repair", "redo": "repair",
+                   "hold": "escalate", "abandon": "escalate"}
 
 GRADE_TEXT = {"good": "通过", "minor": "没有大问题", "low": "打分低", "severe": "严重瑕疵", "unreviewed": "未评审"}
 GRADE_RANK = {"good": 0, "minor": 1, "low": 2, "severe": 3, "unreviewed": 4}
@@ -46,6 +50,17 @@ def _stats(takes):
             "by_grade": {g: sum(1 for t in takes if t["grade"] == g) for g in GRADE_TEXT}}
 
 
+def _human_latest(path):
+    latest = {}
+    if not path.exists():
+        return latest
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            latest[row["take"]] = row
+    return latest
+
+
 def build_series(briefs):
     """把所有成片按提示词系列归组。当前成片 = 通过的那条；没有通过的，取分级最好、轮次最新的一条。"""
     groups, order = {}, []
@@ -67,7 +82,9 @@ def build_series(briefs):
 
 
 def build(path, rubric=None):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    path = Path(path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    humans = _human_latest(path.parent / "human_decisions.jsonl")
     R = rubric or gate.load_rubric()
     floor = R["pass"]["dimension_floor"]
     briefs = []
@@ -96,10 +113,21 @@ def build(path, rubric=None):
                                    for i in merged.get("issues", []) if i.get("detail")])
             row["grade"] = grade(row, floor)
             row["grade_text"] = GRADE_TEXT[row["grade"]]
+            human = humans.get(row["id"])
+            row["human"] = ({"decision": human.get("decision"), "reason": human.get("reason"),
+                             "decided_at": human.get("decided_at"), "reviewer": human.get("reviewer")}
+                            if human else None)
             takes.append(row)
         briefs.append({"id": b.get("id"), "title": b.get("title"), "brief_note": b.get("note"), "takes": takes})
     rule = {"weighted_min": R["pass"]["weighted_min"], "dimension_floor": floor,
             "max_attempts": R.get("max_attempts", 5)}
     all_takes = [t for b in briefs for t in b["takes"]]
-    return {"rule": rule, "briefs": briefs, "series": build_series(briefs), "stats": _stats(all_takes),
+    stats = _stats(all_takes)
+    stats.update(ledger.usage_by_project(path.parent.name))
+    judged = [t for t in all_takes if t.get("human")]
+    comparable = [t for t in judged if t.get("decision") and HUMAN_TO_EXPERT.get(t["human"]["decision"])]
+    agreed = sum(HUMAN_TO_EXPERT[t["human"]["decision"]] == t["decision"] for t in comparable)
+    stats.update(human_count=len(judged), human_compared=len(comparable), human_agreed=agreed,
+                 human_agreement_rate=(agreed / len(comparable) if comparable else None))
+    return {"rule": rule, "briefs": briefs, "series": build_series(briefs), "stats": stats,
             "grade_text": GRADE_TEXT}

@@ -1,8 +1,7 @@
-"""专家判定 与 人工判定 的一致率。只读，不改任何规则。
+"""专家判定与人工判定的一致率；只读，不改任何规则。
 
-人工判定：calibration/human_decisions.jsonl，每行 {"take": "...", "project": "...", "decision": "accept|iterate|redo|...", ...}
-专家判定：<project>/reviews/<take>.decision.json 中的 decision（pass / repair / escalate）
-映射：人工 accept ↔ 专家 pass；iterate / redo ↔ repair；hold / abandon ↔ escalate。
+优先读取每个运行目录的 human_decisions.jsonl，同时兼容旧的
+calibration/human_decisions.jsonl（可用 --decisions 指定）。同一成片只取最新一条。
 """
 import argparse
 import json
@@ -13,11 +12,13 @@ MAP_HUMAN = {"accept": "pass", "release": "pass", "iterate": "repair", "redo": "
              "hold": "escalate", "abandon": "escalate"}
 
 
-def load_jsonl(p):
+def load_jsonl(path):
+    p = Path(path)
+    if not p.exists():
+        return []
     rows = []
-    for line in Path(p).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip():
             rows.append(json.loads(line))
     return rows
 
@@ -26,40 +27,71 @@ def expert_decision(project_dir, take):
     p = Path(project_dir) / "reviews" / f"{take}.decision.json"
     if not p.exists():
         return None, None
-    d = json.loads(p.read_text(encoding="utf-8"))
-    return d.get("decision"), d
+    detail = json.loads(p.read_text(encoding="utf-8"))
+    return detail.get("decision"), detail
+
+
+def collect_decisions(projects, legacy_path=None):
+    """旧集中账本先读，运行目录内的新记录后读并覆盖。"""
+    latest = {}
+    if legacy_path:
+        for row in load_jsonl(legacy_path):
+            latest[(row["project"], row["take"])] = row
+    for project in projects:
+        for row in load_jsonl(Path(project) / "human_decisions.jsonl"):
+            latest[(row.get("project") or Path(project).name, row["take"])] = row
+    return latest
+
+
+def analyze(projects, legacy_path=None):
+    by_take = collect_decisions(projects, legacy_path)
+    result = {"total": 0, "agree": 0, "rate": None, "false_release": [], "false_block": [], "diffs": []}
+    for project in projects:
+        name = Path(project).name
+        for (project_name, take), human in by_take.items():
+            if project_name != name:
+                continue
+            expert, detail = expert_decision(project, take)
+            if expert is None:
+                result["diffs"].append({"project": name, "take": take, "reason": "未找到专家判定"})
+                continue
+            mapped = MAP_HUMAN.get(human.get("decision"))
+            result["total"] += 1
+            if mapped == expert:
+                result["agree"] += 1
+            else:
+                sample = {"project": name, "take": take, "expert": expert,
+                          "human": human.get("decision"), "expert_reason": (detail or {}).get("reason", "")}
+                result["diffs"].append(sample)
+                if expert == "pass" and mapped != "pass":
+                    result["false_release"].append(sample)
+                if expert == "repair" and mapped == "pass":
+                    result["false_block"].append(sample)
+    if result["total"]:
+        result["rate"] = result["agree"] / result["total"]
+    return result
+
+
+def print_result(result, write=print):
+    rate = f"{result['agree']}/{result['total']}（{result['rate']:.1%}）" if result["rate"] is not None else "0/0（样本不足）"
+    write(f"一致率：{rate}")
+    write(f"误放行：{len(result['false_release'])}")
+    for row in result["false_release"]:
+        write(f"  {row['project']} / {row['take']}：专家 {row['expert']}，人工 {row['human']}")
+    write(f"误拦截：{len(result['false_block'])}")
+    for row in result["false_block"]:
+        write(f"  {row['project']} / {row['take']}：专家 {row['expert']}，人工 {row['human']}")
+    for row in result["diffs"]:
+        if "expert" not in row:
+            write(f"缺失：{row['project']} / {row['take']}：{row['reason']}")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="专家与人工判定一致率")
-    ap.add_argument("--decisions", required=True)
+    ap.add_argument("--decisions", help="旧集中人工判定 JSONL；不传则只读各运行目录")
     ap.add_argument("--projects", nargs="+", required=True, help="项目目录（含 reviews/）")
-    a = ap.parse_args(argv)
-    rows = load_jsonl(a.decisions)
-    by_take = {}
-    for r in rows:
-        by_take[(r["project"], r["take"])] = r
-    total = agree = 0
-    diffs = []
-    for proj in a.projects:
-        name = Path(proj).name
-        for (pn, take), h in by_take.items():
-            if pn != name:
-                continue
-            exp, det = expert_decision(proj, take)
-            if exp is None:
-                diffs.append((pn, take, "未找到专家判定"))
-                continue
-            hm = MAP_HUMAN.get(h["decision"])
-            total += 1
-            if hm == exp:
-                agree += 1
-            else:
-                diffs.append((pn, take, f"人工 {h['decision']}（→{hm}） 专家 {exp}：{(det or {}).get('reason', '')}"))
-    rate = f"{agree}/{total}" if total else "0/0"
-    print(f"一致 {rate}")
-    for d in diffs:
-        print("不一致/缺失：", d)
+    args = ap.parse_args(argv)
+    print_result(analyze(args.projects, args.decisions))
     return 0
 
 

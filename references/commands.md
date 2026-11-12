@@ -62,6 +62,30 @@ python3 loop.py board --project <运行目录>                   # 默认 <运�
 - `gen` 提交前先检查预算（`products.can_spend`）。
 - `board` 的调研批次默认 `BOARD_RESEARCH`，可用 `project.json` 的 `research_dir` 覆盖。
 
+## 人工判定与校准（`human.py` / `calibrate.py`）
+
+```bash
+python3 human.py record --project <运行目录> --take <成片id> --verdict accept --note "复查后确认可以接受" --reviewer <名字>
+python3 human.py list --project <运行目录>
+python3 calibrate.py --projects <运行目录> [<运行目录> ...]
+python3 calibrate.py --decisions ../calibration/human_decisions.jsonl --projects <运行目录>  # 兼容旧集中记录
+```
+
+- 人工结论可选 `accept|iterate|redo|hold|abandon|release`，同一成片可以追加多次；校准和看板取最后一条。
+- 判定追加到 `<运行目录>/human_decisions.jsonl`，记录当时的专家结论，不修改专家规则。
+
+## 账本回填（`ledger_backfill.py`）
+
+```bash
+python3 ledger_backfill.py                         # 默认账本，只预览
+python3 ledger_backfill.py --ledger <costs.jsonl> # 指定账本，只预览
+python3 ledger_backfill.py --ledger <costs.jsonl> --apply
+```
+
+- 默认 dry-run，只打印缺金额的视频提交和回填后的项目金额。
+- `--apply` 会先生成同目录的 `costs.jsonl.bak-<时间>`，再只补视频 `submitted` 行中为空的 `estimate_cny`。
+- 对主账本执行 `--apply` 前必须先确认范围；不要用文本模型或 TikHub 的未知价格补金额。
+
 ## 裂变（`fission.py`）
 
 ```bash
