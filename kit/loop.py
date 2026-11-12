@@ -162,9 +162,19 @@ def cmd_gen(a):
     takes_dir.mkdir(parents=True, exist_ok=True)
     jobs_dir.mkdir(parents=True, exist_ok=True)
     job_path = jobs_dir / f"{tid}.json"
-    if job_path.exists() and _read(job_path).get("status") not in ("failed",):
-        job = _read(job_path)
-        print(f"{tid} 已有任务 {job.get('task_id')}（状态 {job.get('status')}），不重复提交")
+    # 2026-11-12 修复：两个进程同时运行会各自提交一次（TSP-S2 实际重复计费）。
+    # 先用排他方式占位，占位成功才允许提交；占位失败说明已有进程在提交或已提交过。
+    claim = jobs_dir / f"{tid}.claim"
+    try:
+        with claim.open("x", encoding="utf-8") as _c:
+            _c.write(_now())
+        claimed = True
+    except FileExistsError:
+        claimed = False
+    existing = job_path.exists() and _read(job_path).get("status") not in ("failed",)
+    if existing or (not claimed and not (job_path.exists() and _read(job_path).get("status") == "failed")):
+        job = _read(job_path) if job_path.exists() else {"task_id": "?", "status": "claiming"}
+        print(f"{tid} 已有提交占位或任务 {job.get('task_id')}（状态 {job.get('status')}），不重复提交")
     else:
         if a.cap < 1:
             sys.exit("预算上限为 0，拒绝提交")
