@@ -545,6 +545,29 @@ class RoundsQuote(unittest.TestCase):
         self.assertEqual(q[3]["expected_good"], 8.75)  # 10 × (1 − 0.5³)
 
 
+class TierFromResearch(unittest.TestCase):
+    def test_strong_same_product_with_copyable_breakdown_is_H(self):
+        import json as _j
+        import research
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "candidates.json").write_text(_j.dumps([{"aweme_id": "a1", "candidate_id": "M001", "hard_pass": True,
+                "final_pass": True, "topic_level": "strong", "duration_s": 10, "desc": "x", "plays": 1}]), encoding="utf-8")
+            (d / "verify.json").write_text(_j.dumps([{"aweme_id": "a1", "verdict": "A", "product_relation": "same"}]), encoding="utf-8")
+            (d / "breakdown.json").write_text(_j.dumps([{"aweme_id": "a1", "dims": {"钩子": 2, "人": 0, "货": 2, "场": 1, "证明": 1, "行动": 1, "可复制": 2}}]), encoding="utf-8")
+            c = research.build(d)["cases"][0]
+        self.assertEqual(c["tier"], "H")
+
+
+class ResearchUse(unittest.TestCase):
+    def test_use_text_by_tier_and_relation(self):
+        import research
+        self.assertIn("替换产品", research.use_text("H", "same"))
+        self.assertIn("只借逻辑", research.use_text("H", "similar"))
+        self.assertIn("只借逻辑", research.use_text("M", "different"))
+        self.assertIn("只作参考", research.use_text("X", "same"))
+
+
 class OwnScriptChecks(unittest.TestCase):
     ANCHOR = "a small clear vial with a plain white label"
 

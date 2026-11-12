@@ -74,6 +74,8 @@ details.past summary{cursor:pointer;min-height:36px;display:flex;align-items:cen
 details.past .take .tk{width:140px}
 .prompt{font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
 button.chip{font:inherit;cursor:pointer;color:var(--fg);min-height:36px}
+.tag.tier-H{color:var(--ok);border-color:var(--ok);font-weight:600} .tag.tier-M{color:var(--accent);border-color:var(--accent);font-weight:600}
+.tag.tier-L{color:var(--warn);border-color:var(--warn);font-weight:600} .tag.tier-X{color:var(--muted);font-weight:600}
 .tag.g-good{color:var(--ok);border-color:var(--ok)} .tag.g-minor{color:var(--accent);border-color:var(--accent)}
 .tag.g-low{color:var(--warn);border-color:var(--warn)} .tag.g-severe{color:var(--bad);border-color:var(--bad)}
 .hidden{display:none}
@@ -110,6 +112,8 @@ function renderResearch(){
     <div>待验证<b>${fmt(counts['C 待验证']||0)}</b></div>
     <div>边界<b>${fmt(counts['D 边界']||0)}</b></div></div>
     <p class="muted">${esc(R.summary || '')}</p>`;
+  const TIER_LEGEND = [['H','可直接替换产品或人物'],['M','保留必选项，场景动作可换'],['L','只借钩子、证明、行动的逻辑'],['X','只作参考，不复刻']];
+  const legend = `<div class="sec"><b>档位</b> ${TIER_LEGEND.map(([k,t]) => `<span class="tag tier-${k}">${k}</span> <span class="muted">${esc(t)}</span>`).join('　')}</div>`;
   const chips = `<div class="chips">${groups.map(g => `<span class="chip ${g===state.group?'on':''}" data-g="${esc(g)}">${esc(g)}${g==='全部'?'':' · '+(counts[g]||0)}</span>`).join('')}</div>`;
   const sel = state.selected;
   const cards = cases.map(c => {
@@ -118,17 +122,18 @@ function renderResearch(){
     const why = ok ? '' : `<span class="muted">不可进入制作：${esc((c.block_reasons||[]).join('；'))}</span>`;
     return `<article class="card" data-case="${esc(c.id)}">
       <div class="thumb">${c.cover ? `<img src="${esc(c.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="" onerror="this.remove()">` : ''}<span class="muted">封面链接可能已过期</span></div>
-      <div class="body"><span class="tag">${esc(c.group)}</span>${ok ? '<span class="tag pass">可进入制作</span>' : ''}<h3>${esc(c.title || c.id)}</h3>
+      <div class="body"><span class="tag tier-${esc(c.tier||'X')}">${esc(c.tier||'X')} 档</span> <span class="tag">${esc(c.group)}</span>${ok ? '<span class="tag pass">可进入制作</span>' : ''}<h3>${esc(c.title || c.id)}</h3>
       <span class="muted">@${esc(c.author||'未提供')} · 播放 ${fmt(c.metrics?.plays)} · 赞 ${fmt(c.metrics?.likes)}</span>
       <span class="muted">来源：${c.source === 'manual' ? (c.local_file ? '本地文件 ' + esc(c.local_file) : '手动链接 ' + esc(c.url||'')) : '调研（TikHub）' + (c.url ? ' · ' + esc(c.url) : '')}</span>
       ${c.source === 'manual' ? `<span class="muted">产品关系：${esc(c.relation || '未说明')}</span>` : ''}
       <label class="pick" data-stop><input type="checkbox" data-sel="${esc(c.id)}" ${checked} ${ok ? '' : 'disabled'}> 选入制作</label>
+      <p class="muted">用法：${esc(c.use || '')}</p>
       ${why}</div></article>`;
   }).join('');
   const selCount = [...sel].length;
   const exportBar = `<div class="sec"><b>已选 ${selCount} 条</b> <button class="btn2" id="exp">导出 selection.json</button>
      <span class="muted">把下载的文件放到项目目录的 selection.json，然后运行 loop.py select。</span></div>`;
-  return head + exportBar + chips + `<div class="grid">${cards || '<p class="muted">这个分组没有案例。</p>'}</div>`;
+  return head + legend + exportBar + chips + `<div class="grid">${cards || '<p class="muted">这个分组没有案例。</p>'}</div>`;
 }
 
 function radar(dims){

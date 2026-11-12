@@ -30,6 +30,22 @@ def _group(c, v):
     return "C 待验证"
 
 
+USE_TEXT = {
+    "H": "可直接替换产品或人物，动作、场景、机位、节奏保留",
+    "M": "保留灵魂卡的必选项，场景和动作可换",
+    "L": "只参考钩子、证明、行动的逻辑，画面全部重做",
+    "X": "只作参考，不复刻，脚本由方法论自写",
+}
+
+
+def use_text(tier, relation):
+    """适用方式。同款（same）才可能替换产品；同类不同形态或不同品类只借逻辑。"""
+    base = USE_TEXT.get(tier, USE_TEXT["X"])
+    if tier in ("H", "M") and relation not in (None, "same"):
+        return "同类不同形态，只借逻辑：" + base
+    return base
+
+
 def build(out_dir):
     out = Path(out_dir)
     cands = _load(out / "candidates.json") or []
@@ -66,6 +82,7 @@ def build(out_dir):
                        if v and not v.get("parse_error") else None),
             "risk": (v or {}).get("risk_reason"),
             "final_pass": bool(c.get("final_pass")),
+            "topic_level": c.get("topic_level"),  # 定档依赖它：缺了就无法判成 H
             "source": c.get("source") or "tiktok",
             "local_file": c.get("local_file"),
             "relation": c.get("relation"),
@@ -74,6 +91,7 @@ def build(out_dir):
         case["tier"] = tier
         case["tier_text"] = replication.TIER_TEXT[tier]
         case["tier_reasons"] = tier_reasons
+        case["use"] = use_text(tier, c.get("relation") or (v or {}).get("product_relation"))
         reasons = []
         if not case["final_pass"] and case.get("topic_level") != "analogy":
             reasons.append("未过主题门控/硬筛")
