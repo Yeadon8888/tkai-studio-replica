@@ -60,6 +60,8 @@ BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它�
 {"dims": {"钩子": 0, "人": 0, "货": 0, "场": 0, "证明": 0, "行动": 0, "可复制": 0},
  "evidence": [{"dim": "钩子", "text": "...", "t": "00:00–00:03"}],
  "judgement": {"怎么读": "...", "学到什么": "...", "我们的判断": "...", "对我们": "...", "边界": "..."},
+ "style": {"rendering": "真人实拍 | 2D 动画 | 3D 动画 | 微观/科普动画 | 混合", "description": "画面风格的具体描述：材质、光线、镜头感、色调、是否有线条或体素等，足够让另一个模型做出同样的风格"},
+ "has_person": true 或 false,
  "risk": "AI 复刻风险一句话"}"""
 
 def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):

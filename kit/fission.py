@@ -35,12 +35,14 @@ CNY_PER_SECOND = settings.video_price()      # .env：VIDEO_PRICE_CNY_PER_SECOND
 MAX_N = settings.get_int("FISSION_MAX_N")    # 单个对标的单批上限；超过需先确认预算
 
 VARY_ALLOWED = {
+    # H 只换产品；换人物仅当参考视频里本来有人（见 check_inputs 的 has_person）。
     "H": {"person", "product"},
     "M": {"person", "product", "scene", "action", "opening", "language", "camera"},
     "L": {"person", "product", "scene", "action", "opening", "language", "camera"},
 }
 FIXED_REQUIRED = {
-    "H": ["action", "scene", "camera", "rhythm"],
+    # H 的视觉风格（动画、3D、微观、实拍）必须保留，这是"像素级复刻"的主要部分；只替换产品。
+    "H": ["style", "action", "scene", "camera", "rhythm"],
     "M": ["must_keep"],
     "L": ["hook", "proof", "cta"],
 }
@@ -68,6 +70,10 @@ def check_inputs(bench, dirs, tier):
         errs.append(f"{tier} 档不允许变化的轴：{', '.join(bad)}")
     if not dirs.get("axes"):
         errs.append("方向文件没有变化轴")
+    if tier == "H" and not style_text(bench):
+        errs.append("H 档缺少视觉风格 style（动画/3D/微观/实拍），不能只换产品而不保留风格")
+    if tier == "H" and "person" in dirs.get("axes", {}) and not bench.get("has_person", True):
+        errs.append("参考视频里没有人物，H 档不能换人物（只换产品）")
     if not bench.get("product_anchor"):
         errs.append("缺少产品锚点 product_anchor，无法注入每个镜头")
     return errs
@@ -123,6 +129,12 @@ def pick_variants(axes, n):
     return chosen
 
 
+def style_text(bench):
+    """视觉风格说明，写进每条提示词。来自拆解的 style 字段，没有则说明缺失（check_inputs 会报）。"""
+    st = (bench.get("fixed") or {}).get("style") or bench.get("style") or ""
+    return f"Visual style (keep exactly): {st}." if st else ""
+
+
 def build_prompt(bench, variant):
     parts = []
     if bench.get("product_anchor"):
@@ -130,6 +142,8 @@ def build_prompt(bench, variant):
     person = variant.get("person")
     if person:
         parts.append(f"The character: {person}.")
+    if style_text(bench):
+        parts.append(style_text(bench))
     parts.append(bench.get("prompt_fixed", ""))
     if variant.get("scene"):
         parts.append(f"Setting: {variant['scene']}.")

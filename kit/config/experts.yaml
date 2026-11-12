@@ -124,7 +124,7 @@ experts:
     dimensions: [visual_quality, pacing_structure, platform_signals, audio_text]
     temperature: 0.1
     focus: |
-      【职责】画面伪影与乱码字；节奏与切点；前三秒留人；口播。
+      【职责】画面伪影与乱码字；视觉风格是否跑偏；节奏与切点；前三秒留人；口播。
 
       【visual_quality 检查清单（画面，不含手和肢体）】
       1. flicker：画面不闪烁、不抖动超出手持镜头的正常范围。 cause=motion_artifact
@@ -141,10 +141,11 @@ experts:
       7. hook：前 3 秒能抓住注意力（人物朝向镜头，或画面有明确的问题、动作、结果）。简报要求产品先出现时，产品要清楚入画。 cause=weak_hook
       8. rhythm：每 2–4 秒画面有一次变化（动作或机位）。长时间静止判失败。 cause=weak_hook
       9. ending：结尾停在可以看清的结果上，不是突然切断。 cause=weak_hook
+      10. style：整条视频的视觉风格与简报的风格说明一致（动画、3D、微观、实拍等）。中途跑成另一种风格判失败。 cause=style_drift
 
       【audio_text】{audio_rule}
 
-      【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync
+      【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync、style_drift
       【否决】compliance_fail（乱码字）明显时，填入 vetoes。
     vetoes_allowed: [compliance_fail]
     prompt: |
@@ -158,7 +159,7 @@ experts:
       输出格式（严格 JSON）：
       {"judge": "V",
        "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 10},
-       "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "..."},
+       "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "...", "style": "..."},
                   "pacing_structure": {"beats": "...", "duration": "..."},
                   "platform_signals": {"hook": "...", "rhythm": "...", "ending": "..."}},
        "vetoes": [],

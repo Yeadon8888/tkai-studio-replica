@@ -9,7 +9,7 @@ dimensions:
   soul_fidelity:       {weight: 0.20, check: "钩子类型、情绪曲线、信息顺序、转化动作与灵魂卡一致；must_keep 项逐条出现", evidence: [soul_must_keep_missing, client_requirement_unmet]}
   product_consistency: {weight: 0.25, check: "形状/颜色/材质/关键细节与产品参考图一致；不变形、不无中生有", evidence: [product_wrong_detail, product_deformed, client_requirement_unmet]}
   person_consistency:  {weight: 0.10, check: "同一人物跨镜头一致，与定妆图相符", evidence: [person_mismatch]}
-  visual_quality:      {weight: 0.15, check: "无畸变、闪烁、多余肢体、穿帮；材质物理合理（本项目：全程零褶皱）", evidence: [motion_artifact, compliance_fail, product_deformed]}
+  visual_quality:      {weight: 0.15, check: "无畸变、闪烁、多余肢体、穿帮；材质物理合理；视觉风格与参考一致（动画/3D/微观/实拍不能跑偏）", evidence: [motion_artifact, compliance_fail, product_deformed, style_drift]}
   audio_text:          {weight: 0.10, check: "口播清楚、关键词不读错；字幕与口播一致；音画同步", evidence: [audio_sync, keyword_misspoken]}
   pacing_structure:    {weight: 0.05, check: "时长、镜头数、切点与计划相符", evidence: [pacing_off]}
   platform_signals:    {weight: 0.15, check: "平台信号代理分（启发式，非真实算法）：前3秒留人、节奏换点、结果停留、转化/互动触发、原生感，见 references/platform-signals.md", evidence: [weak_hook, pacing_off]}
@@ -31,6 +31,7 @@ causes:
   soul_must_keep_missing: {stage: consistency, retry_from: plan, fix: "回到换皮方案，补回缺失的 must_keep，并写明它在哪一镜、由哪句台词触发"}
   forbidden_content:     {stage: delivery, retry_from: plan, fix: "删除违规内容，重新过合规清单"}
   motion_artifact:       {stage: glitches, retry_from: generate, fix: "缩短单镜时长、减少同时运动的元素、降低镜头运动"}
+  style_drift:           {stage: glitches, retry_from: generate, fix: "把参考视频的视觉风格逐条写进提示词（渲染方式、材质、光线、镜头感）；去掉与风格冲突的描述；必要时把风格说明放在提示词开头"}
   pacing_off:            {stage: delivery, retry_from: plan, fix: "调整镜头时长与切点，对齐灵魂卡的节奏曲线"}
   audio_sync:            {stage: delivery, retry_from: compose, fix: "按词级时间戳重新对齐字幕/事件；必要时重做配音"}
   weak_hook:             {stage: delivery, retry_from: plan, fix: "重写前3秒：第1秒产品清楚入画 + 开口第一句直接说感受/结果；去掉铺垫"}

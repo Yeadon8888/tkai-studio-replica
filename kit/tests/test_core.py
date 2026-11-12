@@ -22,7 +22,7 @@ LEGACY_DIM_CAUSES = {
     "soul_fidelity": {"soul_must_keep_missing", "client_requirement_unmet"},
     "product_consistency": {"product_wrong_detail", "product_deformed", "client_requirement_unmet"},
     "person_consistency": {"person_mismatch"},
-    "visual_quality": {"motion_artifact", "compliance_fail", "product_deformed"},
+    "visual_quality": {"motion_artifact", "compliance_fail", "product_deformed", "style_drift"},  # v0.5.0 加入风格跑偏
     "audio_text": {"keyword_misspoken", "audio_sync"},
     "pacing_structure": {"pacing_off"},
     "platform_signals": {"weak_hook", "pacing_off"},
@@ -566,6 +566,28 @@ class ResearchUse(unittest.TestCase):
         self.assertIn("只借逻辑", research.use_text("H", "similar"))
         self.assertIn("只借逻辑", research.use_text("M", "different"))
         self.assertIn("只作参考", research.use_text("X", "same"))
+
+
+class StyleFixed(unittest.TestCase):
+    BENCH = {"product_anchor": "a vial", "fixed": {"style": "3D animated micro-world, glossy", "action": "x", "scene": "y",
+                                                  "camera": "z", "rhythm": "r"}, "prompt_fixed": "animated scene"}
+
+    def test_h_requires_style(self):
+        import fission
+        b = dict(self.BENCH, fixed={k: v for k, v in self.BENCH["fixed"].items() if k != "style"})
+        errs = fission.check_inputs(b, {"axes": {"product": ["a"]}}, "H")
+        self.assertTrue(any("视觉风格" in e for e in errs))
+
+    def test_prompt_carries_style(self):
+        import fission
+        p = fission.build_prompt(self.BENCH, {"product": "vial B"})
+        self.assertIn("3D animated micro-world", p)
+
+    def test_no_person_in_reference_blocks_person_swap(self):
+        import fission
+        b = dict(self.BENCH, has_person=False)
+        errs = fission.check_inputs(b, {"axes": {"person": ["woman"]}}, "H")
+        self.assertTrue(any("没有人物" in e for e in errs))
 
 
 class OwnScriptChecks(unittest.TestCase):
