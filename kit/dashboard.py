@@ -181,6 +181,16 @@ function takeBody(t, rule, compact){
   const issues = (t.issues || []).slice(0, compact ? 3 : 8).map(i => `<li>${i.at ? `<span class="muted">${esc(i.at)}</span> ` : ''}${esc(i.detail)}</li>`).join('');
   const more = (t.issues || []).length > (compact ? 3 : 8) ? `<p class="muted">另有 ${(t.issues.length - (compact ? 3 : 8))} 条问题</p>` : '';
   const cost = `${fmt(t.cost_cny)} 元${t.cost_estimated ? '（估算）' : ''}${t.submits > 1 ? ` · 提交 ${t.submits} 次` : ''}`;
+  const route = `<p class="muted">模型 ${show(t.model)} · 分辨率 ${show(t.resolution)} · 路线 ${show(t.video_route)}</p>`;
+  const notice = t.route_notice ? `<p><span class="tag">${esc(t.route_notice)}</span></p>` : '';
+  const segments = (t.segments || []).map(s => {
+    const segIssues = (s.issues || []).map(i => `<li>${i.at ? `<span class="muted">${esc(i.at)}</span> ` : ''}${esc(i.detail || '')}</li>`).join('');
+    const segVideo = s.video ? `<video controls preload="metadata" playsinline class="tk" src="${esc(s.video)}"></video>` : '<div class="tk none">没有分段文件</div>';
+    return `<details class="sec"><summary><b>${esc(s.id)}</b> · ${esc(s.decision || '未评审')} · ${fmt(s.cost_cny)} 元</summary>
+      ${segVideo}<p class="muted">模型 ${show(s.model)} · 分辨率 ${show(s.resolution)} · 路线 ${show(s.video_route)} · 评审 ${show(s.mode)}</p>
+      ${s.route_notice ? `<p><span class="tag">${esc(s.route_notice)}</span></p>` : ''}
+      ${s.video_fallback ? `<p class="muted">${esc(s.video_fallback)}</p>` : ''}${segIssues ? `<ul class="iss">${segIssues}</ul>` : `<p class="muted">${esc(s.reason || '没有记录问题')}</p>`}</details>`;
+  }).join('');
   const humanNames = {accept:'接受',iterate:'迭代',redo:'重做',hold:'暂缓',abandon:'放弃',release:'放行'};
   const human = t.human
     ? `<p><span class="tag">人工：${esc(humanNames[t.human.decision] || t.human.decision)}</span> ${esc(t.human.reason || '')} <span class="muted">${esc(t.human.decided_at || '')}</span></p>`
@@ -191,10 +201,11 @@ function takeBody(t, rule, compact){
   return `<div class="take">${video}
     <div class="tinfo"><div><span class="tag g-${esc(t.grade)}">${esc(t.grade_text || '')}</span> <b>${esc(t.id || '')}</b></div>
       <p class="muted">第 ${show(t.attempt)} 轮 · 加权 ${show(t.weighted)} · ${cost}</p>
+      ${route}${notice}
       ${human}
       ${vet}${issues ? `<ul class="iss">${issues}</ul>${more}` : (t.grade === 'unreviewed' ? '<p class="muted">还没有评审结果。</p>' : (t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ''))}
       ${compact ? '' : (dims ? `<div class="grid dimgrid">${dims}</div>` : '')}
-      ${t.video ? `<p><a href="${esc(t.video)}" target="_blank" rel="noopener">在新窗口打开 ↗</a></p>` : ''}</div></div>`;
+      ${segments}${t.video ? `<p><a href="${esc(t.video)}" target="_blank" rel="noopener">在新窗口打开 ↗</a></p>` : ''}</div></div>`;
 }
 
 function statLine(st){

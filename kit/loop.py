@@ -36,12 +36,13 @@ import dashboard  # noqa: E402
 import gate  # noqa: E402
 import ledger  # noqa: E402
 import production  # noqa: E402
+import products  # noqa: E402
 import research  # noqa: E402
 import tt_research as tt  # noqa: E402
 
 import settings  # noqa: E402  模型、上限、路径都从 .env 读，见 settings.py
 
-GEN_MODEL = settings.model("video")
+GEN_MODEL = settings.video_route_model("default")  # 旧测试与外部引用兼容；实际生成按简报 video_route 选择
 GEMINI = settings.model("text")   # 兼容旧引用；各环节实际用 settings.model(role)
 CST = dt.timezone(dt.timedelta(hours=8))
 
@@ -175,6 +176,175 @@ def _api(method, path, body=None):
     return common.http_json(method, base + path, headers, body, timeout=120)
 
 
+def _public_url(value, field):
+    if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+        raise ValueError(f"{field} 必须是公开 HTTP(S) 地址")
+    return value
+
+
+def _audio_input(value, field):
+    if not isinstance(value, str) or not value.startswith(("http://", "https://", "data:audio/")):
+        raise ValueError(f"{field} 必须是公开 HTTP(S) 地址或 audio data URI")
+    return value
+
+
+def _image_input(value, field):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} 不能为空")
+    if value.startswith(("http://", "https://", "data:image/")):
+        return value
+    try:
+        return _data_uri(value)
+    except (KeyError, OSError) as exc:
+        raise ValueError(f"{field} 不是可读取的 JPG/PNG/WebP 图片：{value}") from exc
+
+
+def _integer(value, field, low, high, allowed=None):
+    if isinstance(value, bool) or int(value) != float(value):
+        raise ValueError(f"{field} 必须是整数")
+    value = int(value)
+    if value < low or value > high or (allowed and value not in allowed):
+        expected = "/".join(str(x) for x in sorted(allowed)) if allowed else f"{low}–{high}"
+        raise ValueError(f"{field} 必须是 {expected}")
+    return value
+
+
+def _resolution_label(resolution, aspect_ratio, square=True):
+    """首尾帧/换人接口把方向编码在 resolution 中。"""
+    base = settings.base_resolution(resolution)
+    if base not in ("480p", "768p"):
+        raise ValueError("resolution 必须是 480p 或 768p")
+    if str(resolution) != base:
+        allowed = {base + "竖", base + "横"}
+        if square:
+            allowed.add(base + "(1:1)")
+        if str(resolution) not in allowed:
+            raise ValueError(f"resolution 不支持：{resolution}")
+        return str(resolution)
+    suffixes = {"9:16": "竖", "16:9": "横", "1:1": "(1:1)"}
+    if aspect_ratio not in suffixes or (aspect_ratio == "1:1" and not square):
+        raise ValueError(f"aspect_ratio 不支持：{aspect_ratio}")
+    return base + suffixes[aspect_ratio]
+
+
+def build_video_request(brief):
+    """按用途组装并本地校验 TokensFactory 请求；任何异常都发生在付费提交前。"""
+    route = str(brief.get("video_route") or "default")
+    model = settings.video_route_model(route)
+    prompt = str(brief.get("prompt") or "").strip()
+    resolution = str(brief.get("resolution") or settings.get("VIDEO_RESOLUTION"))
+    aspect = str(brief.get("aspect_ratio") or settings.get("VIDEO_ASPECT"))
+
+    if route in ("default", "quality", "fast"):
+        duration = _integer(brief.get("duration", settings.get_float("VIDEO_DURATION")), "duration", 1, 15,
+                            {10, 15} if route == "default" else None)
+        allowed_resolutions = {"768p"} if route == "default" else ({"480p", "768p", "960p"} if route == "quality" else {"480p", "768p"})
+        if resolution not in allowed_resolutions:
+            raise ValueError(f"{route} 路线不支持分辨率 {resolution}")
+        if aspect not in ("9:16", "16:9"):
+            raise ValueError(f"{route} 路线 aspect_ratio 只能是 9:16 或 16:9")
+        images = brief.get("images") or []
+        audios = brief.get("audio_urls") or []
+        if not 1 <= len(images) <= 9:
+            raise ValueError("images 必须有 1–9 张")
+        if len(audios) > 3:
+            raise ValueError("audio_urls 最多 3 条")
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        body = {"model": model, "prompt": prompt,
+                "images": [_image_input(x, f"images[{i}]") for i, x in enumerate(images)],
+                "duration": duration, "resolution": resolution, "aspect_ratio": aspect}
+        if audios:
+            body["audio_urls"] = [_audio_input(x, f"audio_urls[{i}]") for i, x in enumerate(audios)]
+        return route, body
+
+    if route == "keyframe":
+        duration = _integer(brief.get("duration", 5), "duration", 1, 15)
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        body = {"model": model, "first_frame": _image_input(brief.get("first_frame"), "first_frame"),
+                "last_frame": _image_input(brief.get("last_frame"), "last_frame"), "prompt": prompt,
+                "duration": duration, "resolution": _resolution_label(resolution, aspect)}
+        return route, body
+
+    if route == "replace_person":
+        duration = _integer(brief.get("duration", 10), "duration", 5, 25)
+        ref_duration = brief.get("ref_video_duration")
+        if ref_duration is None or float(ref_duration) <= 0:
+            raise ValueError("replace_person 必须提供已核验的 ref_video_duration")
+        if duration > float(ref_duration):
+            raise ValueError(f"duration {duration}s 不能超过参考视频 {float(ref_duration):g}s")
+        if len(prompt) > 2048:
+            raise ValueError("prompt 不能超过 2048 字")
+        if str(brief.get("tier") or "").upper() != "H" or brief.get("reference_has_person") is not True \
+                or brief.get("product_in_frame_not_important") is not True:
+            raise ValueError("replace_person 只用于 H 档、参考视频有人物且简报明确产品在画面里不重要")
+        if settings.base_resolution(resolution) != "768p":
+            raise ValueError("replace_person 路线只支持 768p")
+        body = {"model": model, "ref_image": _image_input(brief.get("ref_image"), "ref_image"),
+                "ref_video": _public_url(brief.get("ref_video"), "ref_video"), "duration": duration,
+                "resolution": _resolution_label(resolution, aspect, square=False)}
+        if prompt:
+            body["prompt"] = prompt
+        return route, body
+
+    if route == "motion":
+        motion_resolution = brief.get("resolution") or "464*832px(竖版)"
+        if motion_resolution not in ("464*832px(竖版)", "832*464px(横版)"):
+            raise ValueError(f"motion 路线不支持分辨率 {motion_resolution}")
+        body = {"model": model, "ref_image": _image_input(brief.get("ref_image"), "ref_image"),
+                "ref_video": _public_url(brief.get("ref_video"), "ref_video"),
+                "resolution": motion_resolution}
+        return route, body
+    raise ValueError(f"未知 video_route：{route}")
+
+
+def _registered_product(project):
+    """运行目录优先读 project.json；旧运行再按 product_state.runs 查找。"""
+    meta_path = Path(project) / "project.json"
+    if meta_path.exists():
+        pid = (_read(meta_path) or {}).get("product_id")
+        if pid:
+            return pid
+    root = settings.studio_home() / "products"
+    if root.exists():
+        for state_path in root.glob("*/product_state.json"):
+            state = _read(state_path)
+            if Path(project).name in (state.get("runs") or []):
+                return state.get("product_id") or state_path.parent.name
+    return None
+
+
+def _check_generation_budget(project, body):
+    pid = _registered_product(project)
+    if not pid:
+        return
+    duration = body.get("duration")
+    price = settings.video_unit_price(body["model"], body.get("resolution"))
+    if price is None or duration is None:
+        raise SystemExit(f"运行已登记到品 {pid}，但 {body['model']} / {body.get('resolution')} 价格未知，无法做预算硬检查")
+    cost = round(float(duration) * price, 4)
+    ok, state = products.can_spend(pid, cost)
+    if not ok:
+        raise SystemExit(f"品 {pid} 预算不足：已花 {state['spent_cny']:.2f} 元，上限 {state['limit_cny']:.2f} 元，"
+                         f"本次需 {cost:.2f} 元；未提交")
+
+
+def _safe_request(body):
+    """任务记录保留结构和摘要，不落盘图片数据。"""
+    out = {}
+    for key, value in body.items():
+        if key in ("images", "audio_urls"):
+            out[key] = [f"sha256:{hashlib.sha256(x.encode()).hexdigest()[:12]} len={len(x)}" for x in value]
+        elif key in ("first_frame", "last_frame", "ref_image", "ref_video"):
+            out[key] = f"sha256:{hashlib.sha256(str(value).encode()).hexdigest()[:12]} len={len(str(value))}"
+        elif key == "prompt":
+            out["prompt_chars"] = len(value)
+        else:
+            out[key] = value
+    return out
+
+
 def _generate_single(a):
     project = Path(a.project)
     brief = _read(a.brief)
@@ -203,28 +373,32 @@ def _generate_single(a):
         if a.cap < 1:
             sys.exit("预算上限为 0，拒绝提交")
         try:
-            images = [_data_uri(p) for p in brief["images"]]
-        except OSError as e:
+            route, body = build_video_request(brief)
+            if route == "replace_person" and brief.get("route_notice") != "仅换人，未换产品":
+                brief["route_notice"] = "仅换人，未换产品"
+                _write(Path(a.brief), brief)
+            _check_generation_budget(project, body)
+        except (OSError, TypeError, ValueError, SystemExit) as e:
             claim.unlink(missing_ok=True)  # 还没有提交，释放占位
-            sys.exit(f"参考图读取失败（未提交，占位已释放）：{e}")
-        duration = brief.get("duration", settings.get_float("VIDEO_DURATION"))
-        body = {"model": GEN_MODEL, "prompt": brief["prompt"], "images": images,
-                "duration": duration, "resolution": brief.get("resolution", "768p"),
-                "aspect_ratio": brief.get("aspect_ratio", "9:16")}
+            sys.exit(f"视频提交前检查失败（未提交，占位已释放）：{e}")
+        model = body["model"]
+        duration = body.get("duration")
+        resolution = body.get("resolution")
         try:
             js = _api("POST", "/v1/videos", body)
         except urllib.error.HTTPError as e:
-            ledger.append("tokensfactory", GEN_MODEL, e.code, project=project.name, ref=tid, units=1)
+            ledger.append("tokensfactory", model, e.code, project=project.name, ref=tid, units=0,
+                          kind="video", resolution=resolution)
             sys.exit(f"提交失败 HTTP {e.code}，不重试")
         task_id = js.get("id") or js.get("task_id") or (js.get("data") or {}).get("id")
         if not task_id:
             sys.exit(f"提交返回里没有任务号：{str(js)[:200]}")
-        job = {"id": tid, "task_id": task_id, "model": GEN_MODEL, "status": "submitted",
-               "submitted_at": _now(),
-               "request": {k: (v if k != "images" else [f"sha256:{hashlib.sha256(x.encode()).hexdigest()[:12]} len={len(x)}" for x in v])
-                           for k, v in body.items() if k != "prompt"} | {"prompt_chars": len(brief["prompt"])}}
+        job = {"id": tid, "task_id": task_id, "model": model, "video_route": route,
+               "resolution": resolution, "status": "submitted", "submitted_at": _now(),
+               "route_notice": brief.get("route_notice"), "request": _safe_request(body)}
         _write(job_path, job)
-        ledger.append("tokensfactory", GEN_MODEL, "submitted", project=project.name, ref=tid, units=duration)
+        ledger.append("tokensfactory", model, "submitted", project=project.name, ref=tid, units=duration,
+                      kind="video", resolution=resolution)
         print(f"{tid} 已提交，任务号 {task_id}（已落盘）")
     # 轮询：网络抖动只记录并继续，不丢任务（2026-11-12 实测 SSL EOF 曾让进程退出，任务停在 in_progress）
     transient = 0
@@ -259,7 +433,8 @@ def _generate_single(a):
                        remote_url=url, remote_url_at=_now())
             _write(job_path, job)
             # 终态记账：金额已在 submitted 行计过，这里 units=0，避免重复计费
-            ledger.append("tokensfactory", GEN_MODEL, "saved", project=project.name, ref=tid, units=0)
+            ledger.append("tokensfactory", job.get("model", GEN_MODEL), "saved", project=project.name, ref=tid,
+                          units=0, kind="video", resolution=job.get("resolution"))
             print(f"{tid} 已保存 → {out}")
             if getattr(a, "no_review", False):
                 job.update(review_skipped=True,
@@ -267,14 +442,15 @@ def _generate_single(a):
                 _write(job_path, job)
             else:
                 import review_panel  # 延迟导入，避免循环导入
-                review_panel.review_take(project, tid, brief.get("images") or [])
+                review_panel.review_take(project, tid, _brief_images(brief))
                 job.update(review_skipped=False, reviewed_at=_now())
                 _write(job_path, job)
             return
         if status in ("failed", "error", "cancelled"):
             job["error"] = str(js)[:300]
             _write(job_path, job)
-            ledger.append("tokensfactory", GEN_MODEL, "failed", project=project.name, ref=tid, units=0)
+            ledger.append("tokensfactory", job.get("model", GEN_MODEL), "failed", project=project.name, ref=tid,
+                          units=0, kind="video", resolution=job.get("resolution"))
             print(f"{tid} 生成失败：{job['error']}（不自动重提）")
             return
     print(f"{tid} 轮询超时，任务仍在：{job['task_id']}，先查原任务，不重提")
@@ -283,17 +459,35 @@ def _generate_single(a):
 def _segment_brief(brief, segment, segment_id):
     """把父简报的一段展开成现有单段生成逻辑可读的简报。"""
     child = {k: v for k, v in brief.items() if k not in ("id", "prompt", "duration", "images", "segments")}
+    child.update({k: v for k, v in segment.items() if k != "reuse_from"})
     child.update({"id": segment_id, "prompt": segment["prompt"],
                   "duration": segment.get("duration", settings.get_float("VIDEO_DURATION")),
-                  "images": segment.get("images", brief.get("images", []))})
+                  "images": segment.get("images", brief.get("images", [])),
+                  "segment_of": brief["id"]})
     return child
 
 
 def _brief_images(brief):
     images = list(brief.get("images") or [])
+    images.extend(x for x in (brief.get("first_frame"), brief.get("last_frame"), brief.get("ref_image")) if x)
     for segment in brief.get("segments") or []:
         images.extend(segment.get("images") or [])
     return list(dict.fromkeys(images))
+
+
+def _copy_reused_review(project, source, target):
+    copied = False
+    for suffix in (".json", ".decision.json"):
+        src = project / "reviews" / f"{source}{suffix}"
+        dst = project / "reviews" / f"{target}{suffix}"
+        if src.exists():
+            value = _read(src)
+            if isinstance(value, dict):
+                value["take"] = target
+                value["reused_from"] = source
+            _write(dst, value)
+            copied = True
+    return copied
 
 
 def brief_duration(brief):
@@ -375,6 +569,9 @@ def cmd_gen(a):
         sid = f"{tid}-s{index}"
         segment_ids.append(sid)
         out = project / "takes" / f"{sid}.mp4"
+        child_path = project / "briefs" / f"{sid}.json"
+        child_brief = _segment_brief(brief, segment, sid)
+        _write(child_path, child_brief)
         reuse_from = segment.get("reuse_from")
         if reuse_from and not out.exists():
             source = project / "takes" / f"{reuse_from}.mp4"
@@ -382,21 +579,29 @@ def cmd_gen(a):
                 print(f"{sid} 要复用的段不存在：{source}，停止且不拼接")
                 return
             shutil.copy2(source, out)
+            source_job_path = project / "jobs" / f"{reuse_from}.json"
+            source_job = _read(source_job_path) if source_job_path.exists() else {}
             _write(project / "jobs" / f"{sid}.json",
-                   {"id": sid, "status": "reused", "reuse_from": reuse_from,
-                    "video": str(out), "saved_at": _now()})
+                   {"id": sid, "status": "reused", "reuse_from": reuse_from, "video": str(out),
+                    "model": source_job.get("model"), "video_route": source_job.get("video_route"),
+                    "resolution": source_job.get("resolution"), "saved_at": _now()})
+            copied_review = _copy_reused_review(project, reuse_from, sid)
+            if not copied_review and not getattr(a, "no_review", False):
+                import review_panel
+                review_panel.review_take(project, sid, _brief_images(child_brief))
             print(f"{sid} 已复用 {reuse_from}")
         elif not out.exists():
-            child_path = project / "briefs" / f"{sid}.json"
-            _write(child_path, _segment_brief(brief, segment, sid))
             child_args = argparse.Namespace(**vars(a))
             child_args.brief = str(child_path)
-            child_args.no_review = True
-            child_args.review_skip_reason = f"分段 {sid}，等待父成片 {tid} 拼接后统一评审"
+            child_args.no_review = getattr(a, "no_review", False)
+            child_args.review_skip_reason = f"父成片 {tid} 显式跳过评审"
             _generate_single(child_args)
         if not out.exists():
             print(f"{sid} 未生成成功，停止且不拼接；已成功的视频段保留")
             return
+        if not getattr(a, "no_review", False) and not (project / "reviews" / f"{sid}.json").exists():
+            import review_panel
+            review_panel.review_take(project, sid, _brief_images(child_brief))
         segment_videos.append(out)
     final = project / "takes" / f"{tid}.mp4"
     final.unlink(missing_ok=True)
@@ -404,8 +609,13 @@ def cmd_gen(a):
         concat_segments(segment_videos, final)
     except (OSError, ValueError, subprocess.CalledProcessError) as e:
         sys.exit(f"{tid} 分段拼接失败：{type(e).__name__}，未生成成片")
+    segment_jobs = [(_read(project / "jobs" / f"{sid}.json")
+                     if (project / "jobs" / f"{sid}.json").exists() else {}) for sid in segment_ids]
+    models = list(dict.fromkeys(j.get("model") for j in segment_jobs if j.get("model")))
+    resolutions = list(dict.fromkeys(j.get("resolution") for j in segment_jobs if j.get("resolution")))
     parent_job = {"id": tid, "status": "saved", "video": str(final), "segments": segment_ids,
-                  "duration": brief_duration(brief), "saved_at": _now()}
+                  "duration": brief_duration(brief), "model": " / ".join(models),
+                  "resolution": " / ".join(resolutions), "saved_at": _now()}
     _write(project / "jobs" / f"{tid}.json", parent_job)
     print(f"{tid} 已拼接 {len(segment_videos)} 段 → {final}")
     if getattr(a, "no_review", False):
@@ -413,7 +623,7 @@ def cmd_gen(a):
                           review_skip_reason=getattr(a, "review_skip_reason", "命令行指定 --no-review"))
     else:
         import review_panel
-        review_panel.review_take(project, tid, _brief_images(brief))
+        review_panel.aggregate_segment_reviews(project, tid, segment_ids, brief)
         parent_job.update(review_skipped=False, reviewed_at=_now())
     _write(project / "jobs" / f"{tid}.json", parent_job)
 
@@ -470,16 +680,21 @@ def cmd_assemble(a):
     project = Path(a.project)
     briefs = sorted((project / "briefs").glob("*.json"))
     all_briefs = [_read(bp) for bp in briefs]
+    segment_brief_ids = {f"{b['id']}-s{i}" for b in all_briefs for i, _ in enumerate(b.get("segments") or [], 1)}
     parents = {b["id"]: (b.get("retry_of") or b.get("parent")) for b in all_briefs}
     costs = take_costs(project.name)
     takes_by_brief = []
     for b in all_briefs:
+        if b["id"] in segment_brief_ids:
+            continue  # 分段只在父成片下展开，不单独成为提示词系列
         takes = []
         for t in b.get("takes", [b["id"]]):
             tid = t if isinstance(t, str) else t["id"]
             rp = project / "reviews" / f"{tid}.json"
             vp = project / "takes" / f"{tid}.mp4"
             rec = _read(rp) if rp.exists() else None
+            job_path = project / "jobs" / f"{tid}.json"
+            job = _read(job_path) if job_path.exists() else {}
             # 三专家记录（review_panel 写入）：取 experts 列表；旧版单评审是 dict 或 list，原样兼容
             if isinstance(rec, dict) and "experts" in rec:
                 reviews = rec["experts"]
@@ -488,19 +703,39 @@ def cmd_assemble(a):
             else:
                 reviews = rec or []
             cost = costs.get(tid)
+            segment_rows = []
             if b.get("segments"):
-                segment_costs = [costs.get(f"{tid}-s{i}") for i in range(1, len(b["segments"]) + 1)]
+                segment_ids = [f"{tid}-s{i}" for i in range(1, len(b["segments"]) + 1)]
+                segment_costs = [costs.get(sid) for sid in segment_ids]
                 paid = [c for c in segment_costs if c]
-                if paid:
-                    cost = {"cny": round(sum(c["cny"] for c in paid), 4),
-                            "submits": sum(c["submits"] for c in paid)}
+                cost = ({"cny": round(sum(c["cny"] for c in paid), 4),
+                         "submits": sum(c["submits"] for c in paid)} if paid else None)
+                for index, sid in enumerate(segment_ids):
+                    srp = project / "reviews" / f"{sid}.json"
+                    sjp = project / "jobs" / f"{sid}.json"
+                    srec = _read(srp) if srp.exists() else {}
+                    sjob = _read(sjp) if sjp.exists() else {}
+                    decision = srec.get("decision") or {}
+                    issues = [i for expert in srec.get("experts") or [] for i in (expert.get("issues") or [])]
+                    scost = segment_costs[index]
+                    segment_rows.append({"id": sid, "video": f"takes/{sid}.mp4" if (project / "takes" / f"{sid}.mp4").exists() else None,
+                                         "duration": float(b["segments"][index].get("duration", settings.get_float("VIDEO_DURATION"))),
+                                         "model": sjob.get("model"), "video_route": sjob.get("video_route"),
+                                         "resolution": sjob.get("resolution"), "route_notice": sjob.get("route_notice"),
+                                         "mode": srec.get("mode"), "video_fallback": srec.get("video_fallback"),
+                                         "decision": decision.get("decision"), "reason": decision.get("reason"),
+                                         "issues": issues, "cost_cny": scost["cny"] if scost else None})
             dur = brief_duration(b) if b.get("segments") else float(b.get("duration", settings.get_float("VIDEO_DURATION")))
             takes.append({"id": tid, "attempt": b.get("attempt", 1), "note": b.get("summary", "")[:120],
                           "video": f"takes/{tid}.mp4" if vp.exists() else None,
                           "series": series_root(b["id"], parents), "duration": dur,
-                          # 花费优先取账本；账本没有记录时按 时长 × 单价 估算，并标明是估算
-                          "cost_cny": cost["cny"] if cost else (round(dur * settings.video_price(), 2) if vp.exists() else 0.0),
-                          "cost_estimated": cost is None, "submits": cost["submits"] if cost else None,
+                          # 多段父成片只汇总各段账本，不再按父时长重复估算。
+                          "cost_cny": cost["cny"] if cost else (None if b.get("segments") else (round(dur * settings.video_price(), 2) if vp.exists() else 0.0)),
+                          "cost_estimated": cost is None and not b.get("segments"), "submits": cost["submits"] if cost else None,
+                          "model": job.get("model"), "video_route": job.get("video_route") or b.get("video_route", "default"),
+                          "resolution": job.get("resolution") or b.get("resolution", settings.get("VIDEO_RESOLUTION")),
+                          "route_notice": job.get("route_notice") or b.get("route_notice"), "segments": segment_rows,
+                          "segment_decision": rec.get("decision") if b.get("segments") and isinstance(rec, dict) else None,
                           "machine_blocking": (rec.get("machine") or {}).get("blocking", []) if isinstance(rec, dict) else [],
                           "prompt": (b.get("prompt") or "")[:600],
                           "reviews": reviews})

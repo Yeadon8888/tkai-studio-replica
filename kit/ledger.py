@@ -15,15 +15,20 @@ LEDGER_FILE = LEDGER_DIR / "costs.jsonl"
 
 
 # 单价（人民币）。只有确认过的价格才写进来；未知的端点估算为 None，不编造。
-# minimax-H3：0.13 元 / 请求秒（CLAUDE.md 中的模型表）。
-PRICES_CNY = {"minimax-H3": 0.13}  # 历史价格，保证旧账本行的估算不变；当前视频模型的价格来自 .env
+# 历史直接调用 estimate_cny 时保留默认 768p 价格；新视频行按 settings.VIDEO_PRICES 与 resolution 计价。
+PRICES_CNY = {"minimax-H3": 0.13}
 
 
-def estimate_cny(endpoint, units, status):
+def estimate_cny(endpoint, units, status, resolution=None):
     """提交行按单位数估算金额；终态行（saved/failed）金额为 0，避免重复计费。"""
     if str(status) in ("saved", "failed"):
         return 0.0
-    price = settings.video_price() if endpoint == settings.model("video") else PRICES_CNY.get(endpoint)
+    price = settings.video_unit_price(endpoint, resolution)
+    if price is None and endpoint == settings.model("video"):
+        # 旧 .env 只配置 MODEL_VIDEO + VIDEO_PRICE_CNY_PER_SECOND 时继续可用。
+        price = settings.get_float("VIDEO_PRICE_CNY_PER_SECOND")
+    if price is None and endpoint in PRICES_CNY and resolution is None:
+        price = PRICES_CNY[endpoint]
     if price is None or not units:
         return None
     return round(price * float(units), 4)
@@ -34,7 +39,7 @@ def is_video_row(row):
     kind = row.get("kind")
     if kind is not None:
         return kind == "video"
-    return row.get("endpoint") == settings.model("video") or row.get("endpoint") in PRICES_CNY
+    return row.get("endpoint") in set(settings.video_prices()) | set(PRICES_CNY)
 
 
 def is_text_row(row):
@@ -52,7 +57,7 @@ def _rows():
     return [json.loads(line) for line in LEDGER_FILE.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def append(provider, endpoint, status, project="", ref="", units=None, usage=None, kind=None):
+def append(provider, endpoint, status, project="", ref="", units=None, usage=None, kind=None, resolution=None):
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     row = {
         "time": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -63,7 +68,8 @@ def append(provider, endpoint, status, project="", ref="", units=None, usage=Non
         "ref": ref,                  # 关联对象，如 candidate_id 或 aweme_id
         "units": units,              # 计费单位数（TikHub 为 1 次请求；视频为秒）
         "usage": usage or {},        # 模型 token 用量等
-        "estimate_cny": estimate_cny(endpoint, units, status),  # 估算金额，未知为 None
+        "resolution": resolution,      # 视频请求的分辨率；旧行没有此字段
+        "estimate_cny": estimate_cny(endpoint, units, status, resolution),  # 估算金额，未知为 None
         "kind": kind,                # text | video | search（旧行没有此字段）
     }
     with LEDGER_FILE.open("a", encoding="utf-8") as f:
