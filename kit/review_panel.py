@@ -184,11 +184,22 @@ def aggregate_segment_reviews(project, take, segment_ids, brief):
     statuses = [d.get("decision") for d in decisions]
     vetoes = sorted({v for d in decisions for v in (d.get("vetoes") or [])})
     lows = sorted({v for d in decisions for v in (d.get("low_dimensions") or [])})
+    uncited = [dict(item, segment=segment_ids[index])
+               for index, row in enumerate(decisions) for item in (row.get("uncited_low") or [])]
     weights = [d.get("weighted") for d in decisions if isinstance(d.get("weighted"), (int, float))]
     if machine["blocking"]:
         decision = {"attempt": brief.get("attempt", 1), "decision": "repair", "stage": "glitches",
                     "retry_from": "generate", "reason": "父成片机器检查未通过：" + "；".join(machine["blocking"]),
                     "weighted": min(weights) if weights else None, "low_dimensions": lows, "vetoes": vetoes}
+    elif any(value == "escalate" for value in statuses):
+        failed = [segment_ids[i] for i, value in enumerate(statuses) if value == "escalate"]
+        reasons = [decisions[i].get("reason") for i, value in enumerate(statuses)
+                   if value == "escalate" and decisions[i].get("reason")]
+        decision = {"attempt": brief.get("attempt", 1), "decision": "escalate", "stage": "segments",
+                    "reason": "以下分段需人工处理：" + "、".join(failed) +
+                              (("；" + "；".join(reasons)) if reasons else ""),
+                    "weighted": min(weights) if weights else None, "low_dimensions": lows,
+                    "vetoes": vetoes, "uncited_low": uncited}
     elif statuses and all(value == "pass" for value in statuses):
         decision = {"attempt": brief.get("attempt", 1), "decision": "pass", "stage": "pass",
                     "reason": "所有分段均通过，父成片机器检查通过", "weighted": min(weights) if weights else None,
@@ -298,7 +309,8 @@ def _normalize_checks(obj):
     return obj
 
 
-def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, frames=None, reference_url=None):
+def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, frames=None, reference_url=None,
+               evidence_request=None):
     frames = frames or []
     reference_url = reference_url or brief.get("replication_reference")
     ft = frame_times(len(frames), brief_duration(brief)) if frames else ""
@@ -308,6 +320,11 @@ def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, fra
         if is_replication and reference_url and video_url else (
             "\n前面是产品参考图，最后是整条成片。请完整观看并按实际时间写时间码。" if video_url
             else "\n前面是产品参考图，后面是成片抽帧（按时间顺序）；声音不可用。")
+    if evidence_request:
+        missing = "；".join(f"{item['dim']} {item['score']} 分" for item in evidence_request)
+        suffix += ("\n\n【补证据，只追问这一次】你刚才给了以下低分但没有写对应问题：" + missing +
+                   "。请重新检查这些维度并输出完整 JSON：每个低于 6.5 分的维度必须写出至少一条带实际时间码的具体问题；"
+                   "如果复看后找不到问题，就改成与你实际判断一致的分数。不要沿用无证据低分。")
     parts = [{"type": "text", "text": prompt + suffix}]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in refs]
     if is_replication and reference_url:
@@ -329,6 +346,30 @@ def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, fra
     obj["judge"] = {"id": exp["id"], "name": exp["name"], "temperature": exp.get("temperature", 0.1),
                     "mode": "video" if video_url else "frames", "frames": len(frames), "frame_times": ft}
     return obj
+
+
+def _retry_evidence_once(exp, obj, project, take, brief, anchor, refs, video_url, frames, reference_url):
+    """一位专家至多补问一次。失败时保留原结果，让闸门把无证据低分交给人。"""
+    _, uncited = gate.normalize_review(obj)
+    if not uncited:
+        return obj
+    retry_log = [{"dimension": item["dim"], "original_score": item["score"]} for item in uncited]
+    try:
+        revised = run_expert(exp, project.name, take, brief, anchor, refs, video_url=video_url, frames=frames,
+                             reference_url=reference_url, evidence_request=uncited)
+        if not isinstance(revised, dict):
+            raise ValueError("补问结果无效")
+    except Exception as exc:
+        for row in retry_log:
+            row.update(new_score=None, evidence_added=False, error=type(exc).__name__)
+        obj["evidence_retry"] = retry_log
+        return obj
+    for row in retry_log:
+        dim = row["dimension"]
+        row.update(new_score=(revised.get("scores") or {}).get(dim),
+                   evidence_added=gate._cited(revised, dim))
+    revised["evidence_retry"] = retry_log
+    return revised
 
 
 def _reachable(url):
@@ -402,12 +443,20 @@ def _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames, ref
         elif obj is None:
             failed.append({"id": exp["id"], "kind": "invalid_output"})
         else:
+            obj = _retry_evidence_once(exp, obj, project, take, brief, anchor, refs_p,
+                                       video_url, frames, reference_url)
             judges.append(obj)
     return judges, failed, False
 
 
-def review_take(project, take, refs, experts_path=EXPERTS_PATH):
+def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
     project = Path(project)
+    output_take = review_id or take
+    if review_id:
+        targets = [project / "reviews" / f"{output_take}.json",
+                   project / "reviews" / f"{output_take}.decision.json"]
+        if any(path.exists() for path in targets):
+            raise FileExistsError(f"新评审文件已存在：{output_take}")
     brief = _read(project / "briefs" / f"{take}.json")
     video = project / "takes" / f"{take}.mp4"
     attempt = brief.get("attempt", 1)
@@ -418,8 +467,10 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     if job.get("composed") and job.get("resolution"):
         check_brief["resolution"] = job["resolution"]
     mc = machine_checks(video, check_brief)
-    record = {"take": take, "attempt": attempt, "mode": "video", "machine": mc,
+    record = {"take": output_take, "attempt": attempt, "mode": "video", "machine": mc,
               "experts": [], "versions": settings.stamp()}
+    if output_take != take:
+        record["source_take"] = take
     record["generation"] = {"model": job.get("model"), "resolution": job.get("resolution"),
                             "video_route": job.get("video_route")}
     if mc["blocking"]:
@@ -428,21 +479,21 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
                     "reason": "机器检查未通过：" + "；".join(mc["blocking"]),
                     "weighted": None, "low_dimensions": [], "vetoes": []}
         record["decision"] = decision
-        _write(project / "reviews" / f"{take}.json", record)
-        _write(project / "reviews" / f"{take}.decision.json", decision)
+        _write(project / "reviews" / f"{output_take}.json", record)
+        _write(project / "reviews" / f"{output_take}.decision.json", decision)
         return decision
     mode, video_url, upload_info = _video_source(project, take, video, brief)
     record["mode"] = mode
     if mode == "frames" and job.get("remote_url") and brief.get("segment_of"):
         record["video_fallback"] = "分段 remote_url 已失效，已改用抽帧；声音不可用"
-    frames = loop._frames(video, project / "reviews" / "frames" / take) if mode == "frames" else []
+    frames = loop._frames(video, project / "reviews" / "frames" / output_take) if mode == "frames" else []
     cfg = load_experts(experts_path)
     refs_p = [Path(p) for p in refs]
     reference_url = brief.get("replication_reference")
     if reference_url and not _reachable(reference_url):
         reference_url = None
     try:
-        judges, failed, not_ingested = _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames,
+        judges, failed, not_ingested = _run_panel(cfg, project, output_take, brief, anchor, refs_p, video_url, frames,
                                                   reference_url)
         if not_ingested and settings.get("MEDIA_UPLOAD") != "off":
             # 模型没读到视频：作废这一轮，改用抽帧重评，并记下原因（抽帧听不到声音，口播判为需人工听）
@@ -450,8 +501,8 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
             mode, video_url = "frames", None
             record["mode"] = "frames"
             record["video_fallback"] = "模型没有读到视频（按 token 判断），已改用抽帧"
-            frames = loop._frames(video, project / "reviews" / "frames" / take)
-            judges, failed, _ = _run_panel(cfg, project, take, brief, anchor, refs_p, None, frames,
+            frames = loop._frames(video, project / "reviews" / "frames" / output_take)
+            judges, failed, _ = _run_panel(cfg, project, output_take, brief, anchor, refs_p, None, frames,
                                             reference_url)
         record["experts"] = judges
     finally:
@@ -471,15 +522,15 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
         decision = {"attempt": attempt, "decision": None,
                     "reason": f"专家评审未完成：{', '.join(x['id'] for x in failed)}，需重跑评审（不重生成视频）"}
         record["decision"] = decision
-        _write(project / "reviews" / f"{take}.json", record)
-        _write(project / "reviews" / f"{take}.decision.json", decision)
+        _write(project / "reviews" / f"{output_take}.json", record)
+        _write(project / "reviews" / f"{output_take}.decision.json", decision)
         return decision
     merged = gate.merge_judges(judges)
     res = gate.evaluate(merged, attempt)
     record["merged"] = merged
     record["decision"] = res
-    _write(project / "reviews" / f"{take}.json", record)
-    _write(project / "reviews" / f"{take}.decision.json", res)
+    _write(project / "reviews" / f"{output_take}.json", record)
+    _write(project / "reviews" / f"{output_take}.decision.json", res)
     return res
 
 
@@ -520,11 +571,14 @@ def main(argv=None):
     ap.add_argument("--project", required=True)
     ap.add_argument("--take", required=True, nargs="+")
     ap.add_argument("--refs", required=True, help="产品参考图，逗号分隔")
+    ap.add_argument("--review-id", help="只用于单条复评：读取 --take 的成片，写入这个新的评审 ID，不覆盖旧文件")
     a = ap.parse_args(argv)
+    if a.review_id and len(a.take) != 1:
+        ap.error("--review-id 只能与一个 --take 一起使用")
     refs = [p for p in a.refs.split(",") if p.strip()]
     for t in a.take:
-        res = review_take(a.project, t, refs)
-        print(_summary(t, res))
+        res = review_take(a.project, t, refs, review_id=a.review_id)
+        print(_summary(a.review_id or t, res))
     return 0
 
 

@@ -183,6 +183,9 @@ function takeBody(t, rule, compact){
   const cost = `${fmt(t.cost_cny)} 元${t.cost_estimated ? '（估算）' : ''}${t.submits > 1 ? ` · 提交 ${t.submits} 次` : ''}`;
   const route = `<p class="muted">模型 ${show(t.model)} · 分辨率 ${show(t.resolution)} · 路线 ${show(t.video_route)}</p>`;
   const notice = t.route_notice ? `<p><span class="tag">${esc(t.route_notice)}</span></p>` : '';
+  const evidenceNotice = t.decision === 'escalate' && (t.uncited_low || []).length
+    ? `<p><span class="tag">需人工看：专家给了低分但没写原因</span> ${esc((t.uncited_low || []).map(x => `${x.judge_name || x.judge_id || '专家'}：${x.dim}`).join('；'))}</p>`
+    : '';
   const segments = (t.segments || []).map(s => {
     const segIssues = (s.issues || []).map(i => `<li>${i.at ? `<span class="muted">${esc(i.at)}</span> ` : ''}${esc(i.detail || '')}</li>`).join('');
     const segVideo = s.video ? `<video controls preload="metadata" playsinline class="tk" src="${esc(s.video)}"></video>` : '<div class="tk none">没有分段文件</div>';
@@ -201,7 +204,7 @@ function takeBody(t, rule, compact){
   return `<div class="take">${video}
     <div class="tinfo"><div><span class="tag g-${esc(t.grade)}">${esc(t.grade_text || '')}</span> <b>${esc(t.id || '')}</b></div>
       <p class="muted">第 ${show(t.attempt)} 轮 · 加权 ${show(t.weighted)} · ${cost}</p>
-      ${route}${notice}
+      ${route}${notice}${evidenceNotice}
       ${human}
       ${vet}${issues ? `<ul class="iss">${issues}</ul>${more}` : (t.grade === 'unreviewed' ? '<p class="muted">还没有评审结果。</p>' : (t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ''))}
       ${compact ? '' : (dims ? `<div class="grid dimgrid">${dims}</div>` : '')}
