@@ -24,9 +24,11 @@ studio/products/<品id>/
   product.json          品卡（已有约定，只读）
   product_state.json    预算、已选对标、运行记录（runs）
   product_anchor.txt    产品锚点，逐字注入每个镜头
+  research/manual/      新增的手动对标批次
+  runs/<日期>-<名称>/   新运行目录
 ```
 
-运行目录（一次批次）放在 `projects/<日期>-<名称>/`，并用 `products.py register-run` 登记到品下。登记后，账本里该运行的花费才会计入这个品。
+用 `products.py new-run --product <品> --name <名称>` 创建运行目录并自动登记。账本的 `project` 字段仍写运行目录名；登记后该运行的花费才计入这个品。旧 `projects/` 运行只读兼容，不迁移、不删除；需要继续统计旧运行时可保留原有登记。
 
 ## 任务队列
 
@@ -44,5 +46,5 @@ studio/products/<品id>/
 ## 调用上限（数值在 `.env`）
 
 - TikHub：单次查询最多 `LIMIT_TIKHUB_CALLS` 次请求（默认 100）。
-- 文本模型：单个运行最多 `LIMIT_TEXT_CALLS` 次（默认 100），含拆解、验证、起草、挑错、审判、修订。到上限即停止。
+- 文本模型：单个运行最多 `LIMIT_TEXT_CALLS` 次（默认 100），含拆解、验证、起草、审判、修订；显式运行实验挑错时也计入。到上限即停止。
 - 视频：每品默认预算 `PRODUCT_BUDGET_CNY`（默认 5 元），超出先沟通并登记理由。

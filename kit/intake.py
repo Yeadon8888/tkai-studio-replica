@@ -7,7 +7,7 @@
   plan       --product <品> --n 10 (--pick M001,M002 | --tiers H,M | --all)   生成前选择复刻范围
 
 设计
-- 手动对标存成一个普通的调研批次（<RESEARCH_ROOT>/manual-<品>/），后面的拆解、定档、看板都走同一套代码。
+- 新手动对标存到 products/<品>/research/manual/；旧外部 research 批次只读兼容。
 - relation 是用户对"对标产品与我方产品关系"的说明：same 同款/同类 → 可到 H；similar 同类不同形态 → 最高 L；
   different 不同品类、只借展示方式 → 类比，最高 L。记在 verify.json 里，source 标为 user。
 - 本地文件不上传到任何公开地址。拆解时只在本机抽帧，把帧图交给文本模型；听不到声音，记录里会注明。
@@ -25,23 +25,24 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 import settings  # noqa: E402
+from common import read_json, write_json  # noqa: E402
 
 RELATIONS = ("same", "similar", "different")
 
 
 def batch_dir(pid):
+    return settings.studio_home() / "products" / pid / "research" / "manual"
+
+
+def legacy_batch_dir(pid):
     return settings.workspace_root() / settings.get("RESEARCH_ROOT") / f"manual-{pid}"
 
 
-def _read(p, default):
-    p = Path(p)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
-
-
-def _write(p, obj):
-    p = Path(p)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+def read_batch_dir(pid):
+    """优先读取品下新目录；不存在时兼容旧外部批次，但不向旧目录写入。"""
+    current = batch_dir(pid)
+    legacy = legacy_batch_dir(pid)
+    return current if current.exists() or not legacy.exists() else legacy
 
 
 def _next_id(cands):
@@ -61,7 +62,7 @@ def verify_row(cand, relation):
 def register(pid, cand, relation):
     """把一条手动对标写进批次（candidates.json + verify.json）。同一视频重复添加会被跳过。"""
     b = batch_dir(pid)
-    cands = _read(b / "candidates.json", [])
+    cands = read_json(b / "candidates.json", [])
     if any(c["aweme_id"] == cand["aweme_id"] for c in cands):
         return next(c for c in cands if c["aweme_id"] == cand["aweme_id"]), False
     cand = dict(cand, candidate_id=_next_id(cands), source="manual", sources=["manual"], hard_pass=True,
@@ -73,10 +74,10 @@ def register(pid, cand, relation):
         covers.cache(b, cand, refresh=False)
     except Exception as e:  # noqa: BLE001
         print(f"封面保存失败（不影响登记）：{type(e).__name__}")
-    _write(b / "candidates.json", cands)
-    ver = [v for v in _read(b / "verify.json", []) if v["aweme_id"] != cand["aweme_id"]]
+    write_json(b / "candidates.json", cands)
+    ver = [v for v in read_json(b / "verify.json", []) if v["aweme_id"] != cand["aweme_id"]]
     ver.append(verify_row(cand, relation))
-    _write(b / "verify.json", ver)
+    write_json(b / "verify.json", ver)
     return cand, True
 
 
@@ -164,8 +165,10 @@ def breakdown_file(cand, pid, n=12):
 def cmd_breakdown(pid, ids=None):
     import loop
     b = batch_dir(pid)
-    cands = _read(b / "candidates.json", [])
-    done = {r["aweme_id"]: r for r in _read(b / "breakdown.json", [])}
+    if read_batch_dir(pid) != b:
+        raise SystemExit("旧手动对标批次只读；请重新添加到品目录后再拆解")
+    cands = read_json(b / "candidates.json", [])
+    done = {r["aweme_id"]: r for r in read_json(b / "breakdown.json", [])}
     todo = [c for c in cands if (not ids or c["candidate_id"] in ids) and c["aweme_id"] not in done]
     url_ids = [c["candidate_id"] for c in todo if not c.get("local_file")]
     for c in [c for c in todo if c.get("local_file")]:
@@ -177,7 +180,7 @@ def cmd_breakdown(pid, ids=None):
             print(f"{c['candidate_id']} 模型输出无法解析，已记账")
             continue
         done[c["aweme_id"]] = obj
-        _write(b / "breakdown.json", list(done.values()))
+        write_json(b / "breakdown.json", list(done.values()))
         print(f"{c['candidate_id']} 拆解完成（整条视频，临时文件已删除={obj.get('media_deleted')}）：" + " ".join(f"{k}{v}" for k, v in obj.get("dims", {}).items()))
     for i in range(0, len(url_ids), 3):  # loop.cmd_breakdown 每次最多 3 条
         loop.cmd_breakdown(argparse.Namespace(batch=str(b), ids=",".join(url_ids[i:i + 3]), cap=3))
@@ -187,7 +190,7 @@ def cmd_breakdown(pid, ids=None):
 
 def cases(pid):
     import research
-    return research.build(batch_dir(pid))["cases"]
+    return research.build(read_batch_dir(pid))["cases"]
 
 
 def make_plan(case_list, n, pick=None, tiers=None, use_all=False, max_n=None, price=None, duration=None):
@@ -269,20 +272,26 @@ def confirm_tier(pid, candidate_id, tier, note):
     if not note.strip():
         raise SystemExit("人工确认必须写理由 --note")
     b = batch_dir(pid)
-    candidates = _read(b / "candidates.json", [])
+    if read_batch_dir(pid) != b:
+        raise SystemExit("旧手动对标批次只读，不能写入人工定档")
+    candidates = read_json(b / "candidates.json", [])
     if candidate_id not in [c.get("candidate_id") for c in candidates]:
         raise SystemExit(f"没有这条对标：{candidate_id}")
     path = b / "tier_overrides.json"
-    overrides = _read(path, {})
+    overrides = read_json(path, {})
     overrides[candidate_id] = {"tier": tier, "note": note.strip(),
                                "confirmed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
-    _write(path, overrides)
+    write_json(path, overrides)
     return overrides[candidate_id]
 
 
-def resolve_run_dir(run):
+def resolve_run_dir(pid, run):
     path = Path(run).expanduser()
-    return path.resolve() if path.is_absolute() else settings.studio_home() / "projects" / path
+    if path.is_absolute():
+        return path.resolve()
+    current = settings.studio_home() / "products" / pid / "runs" / path
+    legacy = settings.studio_home() / "projects" / path
+    return current if current.exists() or not legacy.exists() else legacy
 
 
 def build_plan(pid, run, build_func=None):
@@ -292,9 +301,10 @@ def build_plan(pid, run, build_func=None):
     plan_path = products.product_dir(pid) / "plan.json"
     if not plan_path.is_file():
         raise SystemExit(f"缺少计划：{plan_path}，请先运行 plan")
-    plan = _read(plan_path, {})
-    overrides = _read(batch_dir(pid) / "tier_overrides.json", {})
-    run_dir = resolve_run_dir(run)
+    plan = read_json(plan_path, {})
+    batch = read_batch_dir(pid)
+    overrides = read_json(batch / "tier_overrides.json", {})
+    run_dir = resolve_run_dir(pid, run)
     build_func = build_func or benchmark_builder.build
     results = []
     for item in plan.get("items", []):
@@ -310,7 +320,7 @@ def build_plan(pid, run, build_func=None):
             results.append({"id": item["id"], "ok": False, "skipped": True,
                             "message": "人工确认为 X 档，应走自写脚本，已跳过"})
             continue
-        result = build_func(batch_dir(pid), item["id"], pid, tier, run_dir)
+        result = build_func(batch, item["id"], pid, tier, run_dir)
         results.append({"id": item["id"], **result})
     return results
 
@@ -370,7 +380,7 @@ def main(argv=None):
             "这一个品的预算上限是多少？（默认 5 元）",
             "想要几条成品？多出的条数会在报价里列出费用。",
         ]
-        _write(products.product_dir(pid) / "plan.json", plan)
+        write_json(products.product_dir(pid) / "plan.json", plan)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
     elif a.cmd == "confirm-tier":
         row = confirm_tier(pid, a.id, a.tier, a.note)

@@ -131,8 +131,8 @@ function renderResearch(){
       ${why}</div></article>`;
   }).join('');
   const selCount = [...sel].length;
-  const exportBar = `<div class="sec"><b>已选 ${selCount} 条</b> <button class="btn2" id="exp">导出 selection.json</button>
-     <span class="muted">把下载的文件放到项目目录的 selection.json，然后运行 loop.py select。</span></div>`;
+  const exportBar = `<div class="sec"><b>已勾选 ${selCount} 条（仅供浏览）</b>
+     <span class="muted">请用 products.py select 记录对标，或用 intake.py plan --pick 分配生成范围。</span></div>`;
   return head + legend + exportBar + chips + `<div class="grid">${cards || '<p class="muted">这个分组没有案例。</p>'}</div>`;
 }
 
@@ -274,12 +274,6 @@ function render(){
   body.querySelectorAll('.chip[data-gf]').forEach(el => el.onclick = () => { state.gfilter = el.dataset.gf; render(); });
   body.querySelectorAll('[data-case]').forEach(el => el.onclick = e => { if (e.target.closest('[data-stop]')) return; openCase(el.dataset.case); });
   body.querySelectorAll('input[data-sel]').forEach(el => el.onchange = () => { el.checked ? state.selected.add(el.dataset.sel) : state.selected.delete(el.dataset.sel); saveSel(); render(); });
-  const exp = body.querySelector('#exp');
-  if (exp) exp.onclick = () => {
-    const out = {selected: [...state.selected].sort(), exported_at: new Date().toISOString(), note: '由看板导出；loop.py select 会校验每条是否可进入制作'};
-    const blob = new Blob([JSON.stringify(out, null, 2)], {type: 'application/json'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'selection.json'; a.click();
-  };
 }
 document.addEventListener('click', e => {
   if (e.target.matches('[data-close]') || e.target.id === 'panel') $('#panel').classList.remove('open');

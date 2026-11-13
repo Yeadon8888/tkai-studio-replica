@@ -26,6 +26,7 @@ python3 kit/doctor.py --online
 ## 日常使用
 
 - 在 agent 里直接说："为某某品做视频，对标用这两个链接"，agent 会按 `SKILL.md` 的流程走。
+- 新运行：`python3 kit/products.py new-run --product <品id> --name <名称>`，目录会建在品下并自动登记。
 - 看板：`python3 kit/loop.py board --project <运行目录>`，生成 `board.html`，用浏览器打开。
 - 换模型、改预算：只改 `.env`，然后重新运行体检。
 
@@ -46,7 +47,7 @@ python3 kit/doctor.py --online
 
 - 密钥只放在 `.env` 或你指定的密钥文件里，不要提交到公开仓库。
 - 本地视频只在你同意时上传到你自己的公开仓库，拆解后立即删除。
-- 运行数据（`projects/`、`ledger/`、`media/`）只留在本机。
+- 运行数据（`products/<品>/runs/`、`ledger/`、`media/`）只留在本机；旧 `projects/` 不迁移、不删除。
 
 ## 版本
 

@@ -11,7 +11,7 @@
 预算与失败规则：
 - 生成任务提交后立即落盘 task_id；未完成前不重复提交；失败不自动重提。
 - 每次 Gemini / 生成调用都写入 studio/ledger/costs.jsonl。
-- 超出 GATES.md 的上限会直接拒绝（由调用方传入 --cap）。
+- 超出调用上限会直接拒绝（由调用方传入 --cap；流程见 references/architecture.md）。
 """
 import argparse
 import base64
@@ -93,12 +93,10 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
     base, key = tt.load_tf_env()
     body = {"model": model, "messages": [{"role": "user", "content": parts}],
             "max_tokens": max_tokens, "temperature": temperature}
-    req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "User-Agent": settings.get("HTTP_USER_AGENT")})
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+               "User-Agent": settings.get("HTTP_USER_AGENT")}
     try:
-        with urllib.request.urlopen(req, timeout=240) as r:
-            js = json.loads(r.read().decode("utf-8"))
+        js = common.http_json("POST", base + "/v1/chat/completions", headers, body, timeout=240)
     except urllib.error.HTTPError as e:
         ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
         raise
@@ -172,12 +170,9 @@ def _find_url(js):
 
 def _api(method, path, body=None):
     base, key = tt.load_tf_env()
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(base + path, data=data, method=method,
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "User-Agent": settings.get("HTTP_USER_AGENT")})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read().decode("utf-8") or "{}")
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+               "User-Agent": settings.get("HTTP_USER_AGENT")}
+    return common.http_json(method, base + path, headers, body, timeout=120)
 
 
 def _generate_single(a):
@@ -212,8 +207,9 @@ def _generate_single(a):
         except OSError as e:
             claim.unlink(missing_ok=True)  # 还没有提交，释放占位
             sys.exit(f"参考图读取失败（未提交，占位已释放）：{e}")
+        duration = brief.get("duration", settings.get_float("VIDEO_DURATION"))
         body = {"model": GEN_MODEL, "prompt": brief["prompt"], "images": images,
-                "duration": brief.get("duration", 10), "resolution": brief.get("resolution", "768p"),
+                "duration": duration, "resolution": brief.get("resolution", "768p"),
                 "aspect_ratio": brief.get("aspect_ratio", "9:16")}
         try:
             js = _api("POST", "/v1/videos", body)
@@ -228,7 +224,7 @@ def _generate_single(a):
                "request": {k: (v if k != "images" else [f"sha256:{hashlib.sha256(x.encode()).hexdigest()[:12]} len={len(x)}" for x in v])
                            for k, v in body.items() if k != "prompt"} | {"prompt_chars": len(brief["prompt"])}}
         _write(job_path, job)
-        ledger.append("tokensfactory", GEN_MODEL, "submitted", project=project.name, ref=tid, units=brief.get("duration", 10))
+        ledger.append("tokensfactory", GEN_MODEL, "submitted", project=project.name, ref=tid, units=duration)
         print(f"{tid} 已提交，任务号 {task_id}（已落盘）")
     # 轮询：网络抖动只记录并继续，不丢任务（2026-11-12 实测 SSL EOF 曾让进程退出，任务停在 in_progress）
     transient = 0
@@ -288,7 +284,7 @@ def _segment_brief(brief, segment, segment_id):
     """把父简报的一段展开成现有单段生成逻辑可读的简报。"""
     child = {k: v for k, v in brief.items() if k not in ("id", "prompt", "duration", "images", "segments")}
     child.update({"id": segment_id, "prompt": segment["prompt"],
-                  "duration": segment.get("duration", 10),
+                  "duration": segment.get("duration", settings.get_float("VIDEO_DURATION")),
                   "images": segment.get("images", brief.get("images", []))})
     return child
 
@@ -301,10 +297,11 @@ def _brief_images(brief):
 
 
 def brief_duration(brief):
+    default = settings.get_float("VIDEO_DURATION")
     segments = brief.get("segments") or []
     if segments:
-        return sum(float(s.get("duration", 10)) for s in segments)
-    return float(brief.get("duration", 10))
+        return sum(float(s.get("duration", default)) for s in segments)
+    return float(brief.get("duration", default))
 
 
 def _probe_for_concat(video):
@@ -523,7 +520,7 @@ def cmd_board(a):
     project = Path(a.project)
     meta = _read(project / "project.json") if (project / "project.json").exists() else {}
     rel = a.research or meta.get("research_dir") or BOARD_RESEARCH
-    data = {"subtitle": "调研 → 生成 → 评审 → 闸门（规则见 GATES.md）"}
+    data = {"subtitle": "调研 → 生成 → 评审 → 闸门（流程见 references/architecture.md）"}
     if rel:
         data["research"] = research.build(ROOT / rel)
     if (project / "takes.json").exists():
@@ -532,49 +529,6 @@ def cmd_board(a):
     out = Path(a.out) if a.out else project / "board.html"
     out.write_text(dashboard.render(data, title), encoding="utf-8")
     print("看板 →", out)
-
-
-# ---------------------------------------------------------------- 5. 人工勾选 → 制作
-
-def cmd_select(a):
-    """读取看板导出的 selection.json，逐条用闸门核对后写入项目。不可进入制作的条目需要 --override 并写明理由。"""
-    project = Path(a.project)
-    sel = _read(a.file).get("selected", [])
-    cases = {c["id"]: c for c in research.build(a.batch)["cases"]}
-    ok, rejected = [], []
-    for cid in sel:
-        c = cases.get(cid)
-        if c is None:
-            rejected.append({"id": cid, "reason": "不在本批次的硬筛候选中"})
-        elif c["eligible"]:
-            ok.append(cid)
-        elif a.override:
-            ok.append(cid)
-            rejected.append({"id": cid, "reason": "人工覆盖：" + "；".join(c["block_reasons"]), "overridden": True})
-        else:
-            rejected.append({"id": cid, "reason": "；".join(c["block_reasons"])})
-    _write(project / "selection.json", {"selected": ok, "rejected": rejected,
-                                        "override_reason": a.override or None, "selected_at": _now()})
-    print(f"通过 {len(ok)} 条：{', '.join(ok) or '无'}")
-    for r in rejected:
-        print(f"  未进入制作 {r['id']}：{r['reason']}")
-
-
-def cmd_produce(a):
-    """对 selection.json 中的每条：要求已有简报 → 生成（自动评审）→ 汇总。"""
-    project = Path(a.project)
-    sel = _read(project / "selection.json")["selected"]
-    if not sel:
-        sys.exit("selection.json 里没有可制作的条目，停止。")
-    for cid in sel:
-        brief = project / "briefs" / f"{cid}.json"
-        if not brief.exists():
-            print(f"{cid} 缺少简报 briefs/{cid}.json，跳过")
-            continue
-        ns = argparse.Namespace(project=str(project), brief=str(brief), cap=a.cap, interval=a.interval,
-                                max_polls=a.max_polls, no_review=False)
-        cmd_gen(ns)
-    cmd_assemble(argparse.Namespace(project=str(project)))
 
 
 def main(argv=None):
@@ -603,19 +557,9 @@ def main(argv=None):
     bd.add_argument("--research", help="调研批次目录（相对仓库根）；默认 BOARD_RESEARCH 或 project.json 的 research_dir")
     bd.add_argument("--out", help="输出路径；默认 <项目>/board.html")
     bd.add_argument("--title", help="默认 '生成看板 · <项目id>'")
-    sl = sub.add_parser("select")
-    sl.add_argument("--project", required=True)
-    sl.add_argument("--batch", required=True)
-    sl.add_argument("--file", required=True)
-    sl.add_argument("--override", help="不符合闸门的条目仍要制作时，必须写明理由")
-    pr = sub.add_parser("produce")
-    pr.add_argument("--project", required=True)
-    pr.add_argument("--cap", type=int, default=3)
-    pr.add_argument("--interval", type=int, default=20)
-    pr.add_argument("--max-polls", type=int, default=60)
     a = ap.parse_args(argv)
     {"breakdown": cmd_breakdown, "gen": cmd_gen, "review": cmd_review,
-     "assemble": cmd_assemble, "board": cmd_board, "select": cmd_select, "produce": cmd_produce}[a.cmd](a)
+     "assemble": cmd_assemble, "board": cmd_board}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ sys.path.insert(0, str(KIT))
 import fission  # noqa: E402
 import settings  # noqa: E402
 import tt_research  # noqa: E402
+from common import read_anchor, read_json, write_json  # noqa: E402
 
 
 PROMPT = """你是短视频对标拆解师。根据视频、已有拆解和目标档位，只输出一个 JSON 对象。
@@ -31,19 +32,12 @@ L 档必须把 hook/proof/cta 的逻辑写入 fixed。
 产品长什么样由我方的产品参考图和锚点决定，不由对标决定。"""
 
 
-def _read(path, default=None):
-    p = Path(path)
-    if not p.exists():
-        return default
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
 def _candidate_and_breakdown(batch, candidate_id):
-    candidates = _read(Path(batch) / "candidates.json", []) or []
+    candidates = read_json(Path(batch) / "candidates.json", []) or []
     candidate = next((c for c in candidates if c.get("candidate_id") == candidate_id), None)
     if not candidate:
         return None, None, [f"候选 {candidate_id} 不在 candidates.json 中"]
-    rows = _read(Path(batch) / "breakdown.json", []) or []
+    rows = read_json(Path(batch) / "breakdown.json", []) or []
     breakdown = next((r for r in rows if r.get("aweme_id") == candidate.get("aweme_id")
                       or r.get("candidate_id") == candidate_id), None)
     if not breakdown:
@@ -53,9 +47,7 @@ def _candidate_and_breakdown(batch, candidate_id):
 
 def _product_anchor(product_id):
     path = settings.studio_home() / "products" / product_id / "product_anchor.txt"
-    if not path.is_file():
-        return "", f"缺少产品锚点：{path}"
-    anchor = path.read_text(encoding="utf-8").strip()
+    anchor = read_anchor(path.parent)
     return (anchor, "") if anchor else ("", f"产品锚点为空：{path}")
 
 
@@ -107,11 +99,11 @@ def refresh_play_urls(candidate, batch):
     fresh = intake.fetch_url_candidate(url, client)
     urls = fresh.get("play_urls") or []
     path = Path(batch) / "candidates.json"
-    cands = json.loads(path.read_text(encoding="utf-8"))
+    cands = read_json(path, [])
     for c in cands:
         if c.get("aweme_id") == candidate.get("aweme_id"):
             c["play_urls"] = urls
-    path.write_text(json.dumps(cands, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(path, cands)
     return urls
 
 
@@ -187,8 +179,7 @@ def build(batch, candidate_id, product_id, tier, run_dir, model_call=None, reach
     validation = fission.check_inputs(bench, {"axes": {"product": [anchor]}}, tier)
     if validation:
         return {"ok": False, "errors": validation, "media_deleted": status.get("deleted")}
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(bench, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(out_path, bench)
     return {"ok": True, "path": str(out_path), "media_deleted": status.get("deleted")}
 
 

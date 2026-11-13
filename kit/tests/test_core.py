@@ -74,6 +74,23 @@ class SharedHelpers(unittest.TestCase):
         self.assertIs(loop._write, common._write)
         self.assertIs(review_panel._read, common._read)
 
+    def test_json_anchor_and_http_helpers(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            common.write_json(root / "nested/data.json", {"中文": 1})
+            self.assertEqual(common.read_json(root / "nested/data.json"), {"中文": 1})
+            self.assertEqual(common.read_json(root / "missing.json", []), [])
+            (root / "product_anchor.txt").write_text(" exact product \n", encoding="utf-8")
+            self.assertEqual(common.read_anchor(root), "exact product")
+        response = io.BytesIO(b'{"ok": true}')
+        with mock.patch.object(common.urllib.request, "urlopen", return_value=response) as urlopen:
+            self.assertEqual(common.http_json("POST", "https://example.test", {"X": "y"}, {"a": 1}, 9),
+                             {"ok": True})
+        request = urlopen.call_args.args[0]
+        self.assertEqual((request.method, request.data), ("POST", b'{"a": 1}'))
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 9)
+
 
 class ReviewRouting(unittest.TestCase):
     def test_legacy_review_removed(self):
@@ -206,6 +223,25 @@ class ProductBudget(unittest.TestCase):
                 products.approve_budget("p2", 13, "  ")
             m = products.approve_budget("p2", 13, "用户确认 10 条批次")
             self.assertEqual(products.limit_cny(m), 13.0)
+
+    def test_new_run_is_created_under_product_and_auto_registered(self):
+        import products
+        with tempfile.TemporaryDirectory() as tmp:
+            old_products, old_queue = products.PRODUCTS, products.QUEUE
+            products.PRODUCTS = Path(tmp) / "products"
+            products.QUEUE = products.PRODUCTS / "_queue.json"
+            try:
+                products.create("p3", "测试品")
+                run = products.new_run("p3", "首批", date="20261113")
+                self.assertEqual(run, products.PRODUCTS / "p3/runs/20261113-首批")
+                self.assertTrue((run / "project.json").is_file())
+                self.assertEqual(products.load("p3")["runs"], ["20261113-首批"])
+                ledger_file = Path(tmp) / "costs.jsonl"
+                ledger_file.write_text(json.dumps({"project": run.name, "estimate_cny": 1.5}) + "\n",
+                                       encoding="utf-8")
+                self.assertEqual(products.spent_cny("p3", ledger_file)["spent_cny"], 1.5)
+            finally:
+                products.PRODUCTS, products.QUEUE = old_products, old_queue
 
 
 class CallLimits(unittest.TestCase):
@@ -426,6 +462,26 @@ class Decoupling(unittest.TestCase):
 class ManualIntake(unittest.TestCase):
     CASES = [{"id": "M001", "tier": "H"}, {"id": "M002", "tier": "H"}, {"id": "M003", "tier": "M"},
              {"id": "M004", "tier": "L"}, {"id": "M005", "tier": "X"}]
+
+    def test_new_manual_batch_is_under_product_and_legacy_is_read_only_fallback(self):
+        import intake
+        import settings
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_home, old_root, old_get = settings.studio_home, settings.workspace_root, settings.get
+            settings.studio_home = lambda: root / "studio"
+            settings.workspace_root = lambda: root
+            settings.get = lambda key: "research/tiktok-benchmark" if key == "RESEARCH_ROOT" else old_get(key)
+            try:
+                current = root / "studio/products/p/research/manual"
+                legacy = root / "research/tiktok-benchmark/manual-p"
+                self.assertEqual(intake.batch_dir("p"), current)
+                legacy.mkdir(parents=True)
+                self.assertEqual(intake.read_batch_dir("p"), legacy)
+                current.mkdir(parents=True)
+                self.assertEqual(intake.read_batch_dir("p"), current)
+            finally:
+                settings.studio_home, settings.workspace_root, settings.get = old_home, old_root, old_get
 
     def test_relation_maps_to_verify_and_topic_level(self):
         import os

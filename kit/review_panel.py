@@ -1,6 +1,6 @@
 """三专家评审面板：机器检查 → 三位专家打分 → 合并 → 闸门判定。
 
-流程（ARCHITECTURE-v2 §4）
+流程（见 references/architecture.md）
 1. 机器检查（计算型，阻塞级）：时长、分辨率、宽高比、文件大小。不过则不交给专家，直接 repair（回到 generate）。
 2. 三位专家（推断型，见 config/experts.yaml）各自打分，只负责自己的维度。
 3. gate.merge_judges：逐项取较低值；否决项取并集。
@@ -25,17 +25,18 @@ import yaml  # noqa: E402
 import gate  # noqa: E402
 import media_host  # noqa: E402
 import settings  # noqa: E402
-from common import _read, _write, parse_json  # noqa: E402
+from common import _read, _write, parse_json, read_anchor  # noqa: E402
 import loop  # noqa: E402  (提供 gemini()、_frames()、_data_uri())
 
 EXPERTS_PATH = os.path.join(KIT, "config", "experts.yaml")
 
 
 def brief_duration(brief):
+    default = settings.get_float("VIDEO_DURATION")
     segments = brief.get("segments") or []
     if segments:
-        return sum(float(s.get("duration", 10)) for s in segments)
-    return float(brief.get("duration", 10))
+        return sum(float(s.get("duration", default)) for s in segments)
+    return float(brief.get("duration", default))
 
 
 def brief_text(brief):
@@ -265,7 +266,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     brief = _read(project / "briefs" / f"{take}.json")
     video = project / "takes" / f"{take}.mp4"
     attempt = brief.get("attempt", 1)
-    anchor = brief.get("product_anchor") or _anchor_from_refs(project)
+    anchor = brief.get("product_anchor") or read_anchor(project)
     mc = machine_checks(video, brief)
     record = {"take": take, "attempt": attempt, "mode": "video", "machine": mc,
               "experts": [], "versions": settings.stamp()}
@@ -340,11 +341,6 @@ def reevaluate(project, take):
     _write(rec_path, rec)
     _write(project / "reviews" / f"{take}.decision.json", res)
     return res
-
-
-def _anchor_from_refs(project):
-    p = project / "product_anchor.txt"
-    return p.read_text(encoding="utf-8").strip() if p.exists() else ""
 
 
 def _summary(take, res):
