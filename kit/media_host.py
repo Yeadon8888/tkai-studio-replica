@@ -68,24 +68,35 @@ def upload(local, repo=None):
     with tempfile.TemporaryDirectory() as tmp:
         staged = Path(tmp) / name
         shutil.copy2(p, staged)
-        r = subprocess.run(["gh", "release", "upload", tag, str(staged), "-R", repo, "--clobber"],
-                           capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError("gh release upload 失败：" + r.stderr.strip()[:300])
+        _run_gh(["gh", "release", "upload", tag, str(staged), "-R", repo, "--clobber"], "gh release upload")
     url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
     return {"path": name, "url": url, "sha": digest, "repo": repo, "tag": tag, "bytes": size,
             "host": "release_asset", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+
+def _run_gh(cmd, what, attempts=4):
+    """gh 命令经代理时偶尔断流（EOF）。网络类错误按 5、15、30 秒退避重试；其它错误直接报出。"""
+    last = ""
+    for i in range(attempts):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            return r
+        last = r.stderr.strip()
+        if "already exists" in last:
+            return r
+        network = any(x in last for x in ("EOF", "timeout", "connection", "Connection", "502", "503", "504"))
+        if not network or i == attempts - 1:
+            break
+        time.sleep((5, 15, 30)[min(i, 2)])
+    raise RuntimeError(f"{what} 失败：" + last[:300])
 
 
 def _ensure_release(repo, tag):
     r = subprocess.run(["gh", "release", "view", tag, "-R", repo], capture_output=True, text=True)
     if r.returncode == 0:
         return
-    c = subprocess.run(["gh", "release", "create", tag, "-R", repo, "--title", "temp clips",
-                        "--notes", "Temporary clips for model review; assets are deleted after use"],
-                       capture_output=True, text=True)
-    if c.returncode != 0:
-        raise RuntimeError("gh release create 失败：" + c.stderr.strip()[:300])
+    _run_gh(["gh", "release", "create", tag, "-R", repo, "--title", "temp clips",
+             "--notes", "Temporary clips for model review; assets are deleted after use"], "gh release create")
 
 
 def delete(info):
@@ -93,10 +104,8 @@ def delete(info):
     import urllib.error
     import urllib.request
     if info.get("host") == "release_asset":
-        r = subprocess.run(["gh", "release", "delete-asset", info["tag"], info["path"], "-R", info["repo"], "-y"],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError("gh release delete-asset 失败：" + r.stderr.strip()[:300])
+        _run_gh(["gh", "release", "delete-asset", info["tag"], info["path"], "-R", info["repo"], "-y"],
+                "gh release delete-asset")
     else:
         _gh([f"repos/{info['repo']}/contents/{info['path']}", "-X", "DELETE"],
             {"message": "remove temp clip", "sha": info["sha"], "branch": "main"})
