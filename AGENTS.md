@@ -9,3 +9,4 @@
 - 版本：`VERSION` 和 `CHANGELOG.md` 由审核方（Claude）在合并后统一更新，任务 PR 里不要改这两个文件。
 - 付费调用：只做任务书允许的次数；上游报错不换模型、不批量重试，如实写进 PR。
 - 把 `.env` 的 `STUDIO_HOME` 指向主仓库数据目录时，账本会记到主账本；这是为了花费可追溯，按任务书要求设置。
+- 视频生成路线（用户 2026-11-13 选定）：TokensFactory 的 MiniMax H3 系列（`minimax-H3`、`-cinema`、`-fast`、`-first-last`、`minimax_h3_zm_titi` 等），以 `.env` 为准。`~/.codex/AGENTS.md` 里的 AutoDL 偏好不适用于本仓库。
