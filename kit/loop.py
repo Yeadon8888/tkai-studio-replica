@@ -64,6 +64,24 @@ BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它�
  "has_person": true 或 false,
  "risk": "AI 复刻风险一句话"}"""
 
+class VideoNotIngested(RuntimeError):
+    """请求里带了视频，但模型实际没有读到（prompt token 只有文字和图片的量）。
+    2026-11-13 实测：Release 附件链接（有跳转）会被网关静默丢弃，模型照样编出结论。"""
+
+
+def video_ingested(parts, usage):
+    """按用量判断视频是否被读到：去掉文字 token 和每张图约 1200 token 后，至少还要有 VIDEO_MIN_TOKENS。
+    用量里没有明细时返回 None（无法判断）。"""
+    if not any(p.get("type") == "video_url" for p in parts):
+        return True
+    details = (usage or {}).get("prompt_tokens_details") or {}
+    if "text_tokens" not in details or "prompt_tokens" not in (usage or {}):
+        return None
+    n_img = sum(1 for p in parts if p.get("type") == "image_url")
+    rest = usage["prompt_tokens"] - details["text_tokens"] - 1200 * n_img
+    return rest >= settings.get_int("VIDEO_MIN_TOKENS")
+
+
 def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
     """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
     model = settings.model(role)
@@ -84,7 +102,12 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
         ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
         raise
     text = js["choices"][0]["message"]["content"] or ""
-    ledger.append(settings.get("TEXT_PROVIDER"), model, "ok", project=project, ref=ref, units=1, usage=js.get("usage") or {}, kind="text")
+    usage = js.get("usage") or {}
+    seen = video_ingested(parts, usage)
+    status = "ok" if seen is not False else "video_not_ingested"
+    ledger.append(settings.get("TEXT_PROVIDER"), model, status, project=project, ref=ref, units=1, usage=usage, kind="text")
+    if seen is False:
+        raise VideoNotIngested("模型没有读到视频（按 token 判断），结果作废；检查视频地址是否需要跳转或已失效")
     return text
 
 

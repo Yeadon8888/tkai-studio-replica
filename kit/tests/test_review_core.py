@@ -130,6 +130,38 @@ class ReviewInput(unittest.TestCase):
             record = json.loads((project / "reviews/T1.json").read_text(encoding="utf-8"))
             self.assertEqual(record["mode"], "video")
 
+    def test_video_not_read_falls_back_to_frames_and_is_recorded(self):
+        with tempfile.TemporaryDirectory() as root:
+            project = Path(root)
+            (project / "briefs").mkdir()
+            (project / "takes").mkdir()
+            (project / "briefs/T1.json").write_text(json.dumps({"id": "T1"}), encoding="utf-8")
+            (project / "takes/T1.mp4").write_bytes(b"x")
+            info = {"url": "https://temp/v.mp4", "repo": "r", "path": "p", "sha": "s"}
+            expert = {"scores": {}, "checks": {}, "issues": [], "vetoes": []}
+            calls = []
+
+            def fake_run(exp, *args, video_url=None, frames=None):
+                calls.append(video_url)
+                if video_url:
+                    raise review_panel.loop.VideoNotIngested("not read")
+                return expert
+
+            with mock.patch.object(review_panel, "machine_checks", return_value={"blocking": [], "info": [], "facts": {}}), \
+                 mock.patch.object(review_panel, "_video_source", return_value=("video", info["url"], info)), \
+                 mock.patch.object(review_panel, "run_expert", side_effect=fake_run), \
+                 mock.patch.object(review_panel.loop, "_frames", return_value=[Path("f01.jpg")]), \
+                 mock.patch.object(review_panel.gate, "merge_judges", return_value={"scores": {}}), \
+                 mock.patch.object(review_panel.gate, "evaluate", return_value={"decision": "repair"}), \
+                 mock.patch.object(review_panel.media_host, "delete", return_value=True), \
+                 mock.patch.object(review_panel.media_host, "log"):
+                review_panel.review_take(project, "T1", [])
+            record = json.loads((project / "reviews/T1.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["mode"], "frames")
+            self.assertIn("没有读到视频", record["video_fallback"])
+            self.assertEqual(calls[0], info["url"])          # 先试视频
+            self.assertTrue(all(c is None for c in calls[1:]))  # 没读到后全部改抽帧
+
     def test_upload_off_falls_back_to_frames(self):
         with tempfile.TemporaryDirectory() as root:
             project = Path(root)
@@ -167,3 +199,18 @@ class StopRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VideoIngestionCheck(unittest.TestCase):
+    def test_detects_video_not_read_from_token_usage(self):
+        import loop
+        vid = [{"type": "text", "text": "q"}, {"type": "video_url", "video_url": "https://x"}]
+        img_vid = [{"type": "text", "text": "q"}, {"type": "image_url", "image_url": {"url": "data:"}},
+                   {"type": "video_url", "video_url": "https://x"}]
+        # 2026-11-13 实测：没读到视频时只有文字 token（45）；带 1 张图时约 1134
+        self.assertFalse(loop.video_ingested(vid, {"prompt_tokens": 45, "prompt_tokens_details": {"text_tokens": 45}}))
+        self.assertFalse(loop.video_ingested(img_vid, {"prompt_tokens": 1863, "prompt_tokens_details": {"text_tokens": 774}}))
+        # 读到视频：raw 直链实测 3650 token
+        self.assertTrue(loop.video_ingested(vid, {"prompt_tokens": 3650, "prompt_tokens_details": {"text_tokens": 30}}))
+        self.assertIsNone(loop.video_ingested(vid, {"prompt_tokens": 3650}))
+        self.assertTrue(loop.video_ingested([{"type": "text", "text": "q"}], {}))

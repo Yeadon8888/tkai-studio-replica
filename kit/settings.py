@@ -54,6 +54,7 @@ DEFAULTS = {
     "FISSION_MAX_N": "5",
     "MAX_ATTEMPTS": "3",
     "REVIEW_MAX_TOKENS": "6000",
+    "VIDEO_MIN_TOKENS": "300",     # 带视频的请求里，视频至少占多少 token 才算真的读到；低于它判为没读到
     "REVIEW_FRAMES": "8",
     # 本地视频：github_temp = 上传到下面的公开临时仓库，理解/评审后删除；off = 禁止上传，只能抽帧
     "MEDIA_UPLOAD": "github_temp",

@@ -58,20 +58,78 @@ def upload(local, repo=None):
         raise SystemExit("未设置 MEDIA_HOST_REPO。请在 .env 里填写你自己的公开仓库（格式 用户名/仓库名），例如 MEDIA_HOST_REPO=your-name/studio-media-temp。仓库要先在你的 GitHub 上创建为公开仓库。")
     import hashlib
     import shutil
-    import tempfile
     digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
     name = f"{digest}-{int(time.time())}{p.suffix.lower()}"
-    tag = settings.get("MEDIA_RELEASE_TAG") if "MEDIA_RELEASE_TAG" in settings.load() else "temp-clips"
-    _ensure_release(repo, tag)
-    # 用 Release 附件而不是 contents API：大文件经 contents API 会间歇返回 401，
-    # raw.githubusercontent 被模型侧大量拉取时会返回 429（2026-11-13 实测）。
-    with tempfile.TemporaryDirectory() as tmp:
-        staged = Path(tmp) / name
-        shutil.copy2(p, staged)
-        _run_gh(["gh", "release", "upload", tag, str(staged), "-R", repo, "--clobber"], "gh release upload")
-    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
-    return {"path": name, "url": url, "sha": digest, "repo": repo, "tag": tag, "bytes": size,
-            "host": "release_asset", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    # 用 git 推送到仓库，地址是 raw.githubusercontent 直链（不跳转）。
+    # 2026-11-13 实测：Release 附件链接会跳转，模型网关静默丢弃视频并照样编结论；
+    # contents API 传 10MB 以上文件间歇 401。git 推送稳定，raw 直链模型能读到。
+    repo_dir = _media_repo(repo)
+    dest = repo_dir / "clips" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(p, dest)
+    _git(repo_dir, ["add", f"clips/{name}"])
+    _git(repo_dir, ["commit", "-q", "-m", "temp clip for model review"])
+    _push(repo_dir)
+    url = f"https://raw.githubusercontent.com/{repo}/main/clips/{name}"
+    _wait_until(url, want_ok=True)
+    return {"path": f"clips/{name}", "url": url, "sha": digest, "repo": repo, "bytes": size,
+            "host": "git_raw", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+
+def _media_repo(repo):
+    """临时仓库的本地浅克隆，放在数据目录的 .cache 下，重复使用。"""
+    d = settings.studio_home() / ".cache" / "media-repo"
+    if not (d / ".git").exists():
+        d.parent.mkdir(parents=True, exist_ok=True)
+        _run_gh(["gh", "repo", "clone", repo, str(d), "--", "--depth", "1"], "gh repo clone")
+        _git(d, ["config", "user.name", "studio-media"])
+        _git(d, ["config", "user.email", "studio-media@localhost"])
+    else:
+        _git(d, ["fetch", "-q", "--depth", "1", "origin", "main"])
+        _git(d, ["reset", "-q", "--hard", "origin/main"])
+    return d
+
+
+def _git(repo_dir, args):
+    r = subprocess.run(["git", "-C", str(repo_dir)] + args, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args[:2])} 失败：" + (r.stderr or r.stdout).strip()[:300])
+    return r
+
+
+def _push(repo_dir):
+    """推送；网络断流时退避重试。远端有新提交时先变基。"""
+    last = ""
+    for i in range(4):
+        r = subprocess.run(["git", "-C", str(repo_dir), "push", "-q", "origin", "HEAD:main"], capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+        last = (r.stderr or r.stdout).strip()
+        if "rejected" in last or "fetch first" in last:
+            _git(repo_dir, ["pull", "-q", "--rebase", "origin", "main"])
+        time.sleep((5, 15, 30)[min(i, 2)])
+    raise RuntimeError("git push 失败：" + last[:300])
+
+
+def _wait_until(url, want_ok, timeout=90):
+    """raw 地址在推送后要几秒才可用；删除后 CDN 可能缓存几分钟，删除的核对用 contents API。"""
+    import urllib.error
+    import urllib.request
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20)
+            if want_ok:
+                return True
+        except urllib.error.HTTPError as e:
+            if not want_ok and e.code == 404:
+                return True
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(5)
+    if want_ok:
+        raise RuntimeError("上传后视频地址一直不可访问：" + url)
+    return False
 
 
 def _run_gh(cmd, what, attempts=4):
@@ -91,29 +149,23 @@ def _run_gh(cmd, what, attempts=4):
     raise RuntimeError(f"{what} 失败：" + last[:300])
 
 
-def _ensure_release(repo, tag):
-    r = subprocess.run(["gh", "release", "view", tag, "-R", repo], capture_output=True, text=True)
-    if r.returncode == 0:
-        return
-    _run_gh(["gh", "release", "create", tag, "-R", repo, "--title", "temp clips",
-             "--notes", "Temporary clips for model review; assets are deleted after use"], "gh release create")
-
-
 def delete(info):
-    """删除临时文件并核对。返回 True 表示已确认不可访问。兼容旧记录（contents API 上传的文件）。"""
-    import urllib.error
-    import urllib.request
-    if info.get("host") == "release_asset":
+    """删除临时文件并核对。返回 True 表示仓库里已不存在（以 contents API 为准；raw 的 CDN 缓存会多留几分钟）。
+    兼容旧记录：release_asset、contents API 上传的文件。"""
+    if info.get("host") == "git_raw":
+        repo_dir = _media_repo(info["repo"])
+        if (repo_dir / info["path"]).exists():
+            _git(repo_dir, ["rm", "-q", info["path"]])
+            _git(repo_dir, ["commit", "-q", "-m", "remove temp clip"])
+            _push(repo_dir)
+    elif info.get("host") == "release_asset":
         _run_gh(["gh", "release", "delete-asset", info["tag"], info["path"], "-R", info["repo"], "-y"],
                 "gh release delete-asset")
     else:
         _gh([f"repos/{info['repo']}/contents/{info['path']}", "-X", "DELETE"],
             {"message": "remove temp clip", "sha": info["sha"], "branch": "main"})
-    try:
-        urllib.request.urlopen(urllib.request.Request(info["url"], method="HEAD"), timeout=30)
-        return False
-    except urllib.error.HTTPError as e:
-        return e.code == 404
+    r = subprocess.run(["gh", "api", f"repos/{info['repo']}/contents/{info['path']}"], capture_output=True, text=True)
+    return r.returncode != 0 and "404" in (r.stderr + r.stdout)
 
 
 def log(info, extra):

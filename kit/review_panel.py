@@ -213,6 +213,38 @@ def _video_source(project, take, video):
     return "video", info["url"], info
 
 
+def _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames):
+    """跑三位专家。返回 (judges, failed, not_ingested)。not_ingested 为 True 表示模型没读到视频，本轮作废。"""
+    judges, failed = [], []
+    for exp in cfg["experts"]:
+        obj, last_err = None, None
+        for attempt_no in range(1, 3):  # 只对上游瞬时错误（5xx、429、超时断连、输出截断）重试 1 次；评审只读
+            try:
+                obj = run_expert(exp, project.name, take, brief, anchor, refs_p,
+                                 video_url=video_url, frames=frames)
+                last_err = None
+                break
+            except loop.VideoNotIngested:
+                return [], [], True
+            except Exception as e:
+                last_err = e
+                code = getattr(e, "code", None)
+                print(f"{take} {exp['id']} 第 {attempt_no} 次调用失败：{type(e).__name__} {code or ''}")
+                transient = (isinstance(code, int) and (code >= 500 or code == 429)) or code is None
+                if not transient:
+                    break
+                import time
+                time.sleep(45 if code == 429 else 15)
+        if last_err is not None:
+            failed.append({"id": exp["id"], "kind": "call_error", "error": type(last_err).__name__,
+                           "status": getattr(last_err, "code", None)})
+        elif obj is None:
+            failed.append({"id": exp["id"], "kind": "invalid_output"})
+        else:
+            judges.append(obj)
+    return judges, failed, False
+
+
 def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     project = Path(project)
     brief = _read(project / "briefs" / f"{take}.json")
@@ -236,35 +268,17 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     frames = loop._frames(video, project / "reviews" / "frames" / take) if mode == "frames" else []
     cfg = load_experts(experts_path)
     refs_p = [Path(p) for p in refs]
-    judges, failed = [], []
     try:
-        for exp in cfg["experts"]:
-            obj, last_err = None, None
-            for attempt_no in range(1, 3):  # 只对上游瞬时错误（5xx、超时、断连）重试 1 次；评审只读，不重生成视频
-                try:
-                    obj = run_expert(exp, project.name, take, brief, anchor, refs_p,
-                                     video_url=video_url, frames=frames)
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    code = getattr(e, "code", None)
-                    print(f"{take} {exp['id']} 第 {attempt_no} 次调用失败：{type(e).__name__} {code or ''}")
-                    # 5xx、429、超时断连、输出被截断（ValueError）都算瞬时问题，重试 1 次
-                    transient = (isinstance(code, int) and (code >= 500 or code == 429)) or code is None
-                    if not transient:
-                        break
-                    import time
-                    time.sleep(45 if code == 429 else 15)
-            if last_err is not None:
-                failed.append({"id": exp["id"], "kind": "call_error", "error": type(last_err).__name__,
-                               "status": getattr(last_err, "code", None)})
-            if obj is None:
-                if not any(x["id"] == exp["id"] for x in failed):
-                    failed.append({"id": exp["id"], "kind": "invalid_output"})
-            else:
-                judges.append(obj)
-                record["experts"].append(obj)
+        judges, failed, not_ingested = _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames)
+        if not_ingested and settings.get("MEDIA_UPLOAD") != "off":
+            # 模型没读到视频：作废这一轮，改用抽帧重评，并记下原因（抽帧听不到声音，口播判为需人工听）
+            print(f"{take} 模型没有读到视频，改用抽帧重评")
+            mode, video_url = "frames", None
+            record["mode"] = "frames"
+            record["video_fallback"] = "模型没有读到视频（按 token 判断），已改用抽帧"
+            frames = loop._frames(video, project / "reviews" / "frames" / take)
+            judges, failed, _ = _run_panel(cfg, project, take, brief, anchor, refs_p, None, frames)
+        record["experts"] = judges
     finally:
         if upload_info:
             deleted = False
