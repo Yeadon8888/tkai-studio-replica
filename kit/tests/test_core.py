@@ -26,10 +26,12 @@ LEGACY_DIM_CAUSES = {
     "audio_text": {"keyword_misspoken", "audio_sync"},
     "pacing_structure": {"pacing_off"},
     "platform_signals": {"weak_hook", "pacing_off"},
+    "replication_fidelity": {"replication_mismatch"},
 }
 LEGACY_DEFAULT = {"product_consistency": "product_wrong_detail", "person_consistency": "person_mismatch",
                   "audio_text": "audio_sync", "pacing_structure": "pacing_off", "soul_fidelity": "soul_must_keep_missing",
-                  "visual_quality": "motion_artifact", "platform_signals": "weak_hook"}
+                  "visual_quality": "motion_artifact", "platform_signals": "weak_hook",
+                  "replication_fidelity": "replication_mismatch"}
 
 
 class RubricSingleSource(unittest.TestCase):

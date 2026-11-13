@@ -262,7 +262,8 @@ def _expert_prompt(exp, brief, anchor, timecode_text="", audio_available=True):
     focus = (exp["focus"].strip()
              .replace("{must_keep}", must_keep_text(brief))
              .replace("{duration}", f"{brief_duration(brief):g}")
-             .replace("{audio_rule}", audio_rule(brief, audio_available)))
+             .replace("{audio_rule}", audio_rule(brief, audio_available))
+             .replace("{shot_list}", json.dumps(brief.get("segments") or brief.get("shot") or [], ensure_ascii=False)[:4000]))
     return (exp["prompt"]
             .replace("{brief}", brief_text(brief)[:800])
             .replace("{anchor}", anchor or "（简报未提供锚点）")
@@ -297,14 +298,20 @@ def _normalize_checks(obj):
     return obj
 
 
-def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, frames=None):
+def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, frames=None, reference_url=None):
     frames = frames or []
+    reference_url = reference_url or brief.get("replication_reference")
     ft = frame_times(len(frames), brief_duration(brief)) if frames else ""
     prompt = _expert_prompt(exp, brief, anchor, ft, audio_available=bool(video_url))
-    suffix = "\n前面是产品参考图，最后是整条成片。请完整观看并按实际时间写时间码。" if video_url \
-        else "\n前面是产品参考图，后面是成片抽帧（按时间顺序）；声音不可用。"
+    is_replication = exp.get("id") == "R"
+    suffix = "\n前面是产品参考图，接着是对标视频，最后是整条成片。请完整对照观看并按成片实际时间写时间码。" \
+        if is_replication and reference_url and video_url else (
+            "\n前面是产品参考图，最后是整条成片。请完整观看并按实际时间写时间码。" if video_url
+            else "\n前面是产品参考图，后面是成片抽帧（按时间顺序）；声音不可用。")
     parts = [{"type": "text", "text": prompt + suffix}]
     parts += [{"type": "image_url", "image_url": {"url": loop._data_uri(p)}} for p in refs]
+    if is_replication and reference_url:
+        parts.append({"type": "video_url", "video_url": reference_url})
     if video_url:
         parts.append({"type": "video_url", "video_url": video_url})
     else:
@@ -356,14 +363,25 @@ def _video_source(project, take, video, brief=None):
     return "video", info["url"], info
 
 
-def _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames):
-    """跑三位专家。返回 (judges, failed, not_ingested)。not_ingested 为 True 表示模型没读到视频，本轮作废。"""
+def _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames, reference_url=None):
+    """跑四位专家。返回 (judges, failed, not_ingested)。not_ingested 为 True 表示模型没读到视频，本轮作废。"""
     judges, failed = [], []
     for exp in cfg["experts"]:
+        if exp.get("id") == "R" and not brief.get("replication_reference"):
+            judges.append({"judge": {"id": "R", "name": exp.get("name"), "mode": "not_applicable"},
+                           "scores": {"replication_fidelity": gate.NEUTRAL}, "checks": {},
+                           "vetoes": [], "issues": [], "notes": "该简报不是对标复刻，维度不适用"})
+            continue
+        if exp.get("id") == "R" and not reference_url:
+            failed.append({"id": "R", "kind": "reference_unavailable"})
+            continue
         obj, last_err = None, None
         for attempt_no in range(1, 3):  # 只对上游瞬时错误（5xx、429、超时断连、输出截断）重试 1 次；评审只读
             try:
-                obj = run_expert(exp, project.name, take, brief, anchor, refs_p,
+                expert_brief = dict(brief)
+                if reference_url:
+                    expert_brief["replication_reference"] = reference_url
+                obj = run_expert(exp, project.name, take, expert_brief, anchor, refs_p,
                                  video_url=video_url, frames=frames)
                 last_err = None
                 break
@@ -394,11 +412,14 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     video = project / "takes" / f"{take}.mp4"
     attempt = brief.get("attempt", 1)
     anchor = brief.get("product_anchor") or read_anchor(project)
-    mc = machine_checks(video, brief)
-    record = {"take": take, "attempt": attempt, "mode": "video", "machine": mc,
-              "experts": [], "versions": settings.stamp()}
     job_path = project / "jobs" / f"{take}.json"
     job = _read(job_path) if job_path.exists() else {}
+    check_brief = dict(brief)
+    if job.get("composed") and job.get("resolution"):
+        check_brief["resolution"] = job["resolution"]
+    mc = machine_checks(video, check_brief)
+    record = {"take": take, "attempt": attempt, "mode": "video", "machine": mc,
+              "experts": [], "versions": settings.stamp()}
     record["generation"] = {"model": job.get("model"), "resolution": job.get("resolution"),
                             "video_route": job.get("video_route")}
     if mc["blocking"]:
@@ -417,8 +438,12 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     frames = loop._frames(video, project / "reviews" / "frames" / take) if mode == "frames" else []
     cfg = load_experts(experts_path)
     refs_p = [Path(p) for p in refs]
+    reference_url = brief.get("replication_reference")
+    if reference_url and not _reachable(reference_url):
+        reference_url = None
     try:
-        judges, failed, not_ingested = _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames)
+        judges, failed, not_ingested = _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames,
+                                                  reference_url)
         if not_ingested and settings.get("MEDIA_UPLOAD") != "off":
             # 模型没读到视频：作废这一轮，改用抽帧重评，并记下原因（抽帧听不到声音，口播判为需人工听）
             print(f"{take} 模型没有读到视频，改用抽帧重评")
@@ -426,7 +451,8 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
             record["mode"] = "frames"
             record["video_fallback"] = "模型没有读到视频（按 token 判断），已改用抽帧"
             frames = loop._frames(video, project / "reviews" / "frames" / take)
-            judges, failed, _ = _run_panel(cfg, project, take, brief, anchor, refs_p, None, frames)
+            judges, failed, _ = _run_panel(cfg, project, take, brief, anchor, refs_p, None, frames,
+                                            reference_url)
         record["experts"] = judges
     finally:
         if upload_info:
@@ -465,6 +491,10 @@ def reevaluate(project, take):
     judges = rec.get("experts") or []
     if not judges:
         return rec.get("decision")
+    if not any("replication_fidelity" in (row.get("scores") or {}) for row in judges):
+        judges = list(judges) + [{"scores": {"replication_fidelity": gate.NEUTRAL},
+                                  "vetoes": [], "issues": [],
+                                  "judge": {"id": "legacy", "name": "R8 前历史兼容"}}]
     attempt = rec.get("attempt", 1)
     merged = gate.merge_judges(judges)
     res = gate.evaluate(merged, attempt)

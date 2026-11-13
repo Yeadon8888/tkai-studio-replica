@@ -247,6 +247,9 @@ function renderProduction(){
   const GT = P.grade_text || {};
   const humanRate = st.human_agreement_rate == null ? '样本不足' : `${st.human_agreed}/${st.human_compared}（${Math.round(st.human_agreement_rate * 100)}%）`;
   const textTokens = (st.prompt_tokens || 0) + (st.completion_tokens || 0);
+  const shotData = P.shot_list || {};
+  const shotRows = (shotData.shots || []).map(s => `<tr><td>${esc(s.id)}</td><td>${show(s.start)}–${show(s.end)}s</td><td>${esc(s.scale || '')}</td><td>${esc(s.camera || '')}</td><td>${esc(s.action || '')}</td><td>${esc(s.voiceover || '')}</td></tr>`).join('');
+  const shotTable = shotRows ? `<section class="sec"><h4>镜头表 · ${esc(shotData.candidate_id || '')}</h4><p class="muted">${esc(shotData.summary || '')}</p><div class="tablewrap"><table><thead><tr><th>镜头</th><th>时间</th><th>景别</th><th>机位</th><th>动作</th><th>原口播</th></tr></thead><tbody>${shotRows}</tbody></table></div></section>` : '';
   const kpi = `<div class="kv">
     <div>成片总数<b>${show(st.takes)}</b></div><div>通过<b>${show(st.good)}</b></div>
     <div>废片率<b>${esc(sl.rate || '未提供')}</b></div>
@@ -274,7 +277,8 @@ function renderProduction(){
       <p class="muted">系列 ${esc(s.id)} · 共 ${ss.takes} 条 · 通过 ${ss.good} · 废片率 ${esc(l.rate)} · 花费 ${show(ss.cost_cny)} 元 · 成品单价 ${esc(l.per)}</p>
       ${takeBody(fin, rule, false)}${prompt}${pastHtml}</section>`;
   }).join('');
-  return kpi + head + `<div class="chips">${chips}</div>` + (series || '<p class="muted">没有符合条件的成片。</p>');
+  const humanHint = `<p class="muted">成片须由人工决定后才可继续：python3 kit/human.py record --project &lt;运行目录&gt; --take &lt;成片ID&gt; --verdict accept|iterate|redo|hold|abandon --note &lt;理由&gt;</p>`;
+  return kpi + head + shotTable + humanHint + `<div class="chips">${chips}</div>` + (series || '<p class="muted">没有符合条件的成片。</p>');
 }
 
 function render(){
