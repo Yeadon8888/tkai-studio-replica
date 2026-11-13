@@ -14,6 +14,7 @@ Gemini 只负责"写提示词文字"，不决定通过与否，也不改产品�
 """
 import hashlib
 import json
+import re
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -134,6 +135,56 @@ def revise(prompt, anchor, fixed, issues, llm):
     return None, last
 
 
+def brief_duration(brief):
+    segments = brief.get("segments") or []
+    if segments:
+        return sum(float(s.get("duration", 10)) for s in segments)
+    return float(brief.get("duration", 10))
+
+
+def generation_duration(brief):
+    """复用段不产生新的视频调用，预算只预留本轮实际要生成的秒数。"""
+    segments = brief.get("segments") or []
+    if segments:
+        return sum(float(s.get("duration", 10)) for s in segments if not s.get("reuse_from"))
+    return float(brief.get("duration", 10))
+
+
+def brief_prompt(brief):
+    if brief.get("segments"):
+        return "\n".join(s.get("prompt", "") for s in brief["segments"])
+    return brief.get("prompt", "")
+
+
+def _issue_second(at):
+    """取时间码的起点秒数；兼容 00:12、00:12–00:14 和 12s。"""
+    if not at:
+        return None
+    match = re.search(r"(?:(\d+):)?(\d+(?:\.\d+)?)", str(at))
+    if not match:
+        return None
+    return int(match.group(1) or 0) * 60 + float(match.group(2))
+
+
+def segment_for_second(segments, second):
+    elapsed = 0.0
+    for index, segment in enumerate(segments):
+        elapsed += float(segment.get("duration", 10))
+        if second < elapsed or index == len(segments) - 1:
+            return index
+    return None
+
+
+def affected_segments(segments, issues):
+    """有可用时间码时只返回命中的段；没有时间码时保守地修订所有段。"""
+    affected = set()
+    for issue in issues:
+        second = _issue_second(issue.get("at"))
+        if second is not None:
+            affected.add(segment_for_second(segments, second))
+    return affected if affected else set(range(len(segments)))
+
+
 def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_attempts=None, log_dir=None):
     """返回 {"status": succeeded|escalated|repeat_defect|max_attempts|budget_stop|gen_failed|revise_failed, "attempts": [...]}。
     gen(project, brief_path) 与 review(project, take_id, refs) 可注入，便于测试；默认在 main() 里接真实函数。"""
@@ -147,7 +198,7 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
     for n in range(1, max_attempts + 1):
         tid = f"{base}-a{n}"
         brief["id"] = tid
-        cost = float(brief.get("duration", 10)) * COST_PER_SECOND
+        cost = generation_duration(brief) * COST_PER_SECOND
         ok, state = products.can_spend(pid, cost)
         if not ok:
             rec = {"attempt": n, "take": tid, "stop": "budget", "spent": state["spent_cny"], "limit": state["limit_cny"]}
@@ -164,7 +215,7 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
             return {"status": "gen_failed", "attempts": attempts}
         decision = review(project, tid, refs)
         causes = failure_causes(project, tid, decision)
-        rec = {"attempt": n, "take": tid, "prompt_sha256": hashlib.sha256(brief["prompt"].encode()).hexdigest()[:12],
+        rec = {"attempt": n, "take": tid, "prompt_sha256": hashlib.sha256(brief_prompt(brief).encode()).hexdigest()[:12],
                "decision": decision.get("decision"), "weighted": decision.get("weighted"),
                "low": decision.get("low_dimensions"), "vetoes": decision.get("vetoes"),
                "causes": sorted(causes)}
@@ -184,13 +235,37 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
         if n == max_attempts:
             break
         issues = collect_issues(project, tid, decision)
-        new_prompt, errs = revise(brief["prompt"], anchor, fixed, issues, llm)
-        if new_prompt is None:
-            rec2 = {"attempt": n, "stop": "revise_failed", "errors": errs}
-            attempts.append(rec2)
-            _log(log, rec2)
-            return {"status": "revise_failed", "attempts": attempts}
-        brief["prompt"] = new_prompt
+        segments = brief.get("segments") or []
+        if segments:
+            affected = affected_segments(segments, issues)
+            revised = [dict(segment) for segment in segments]
+            for index, segment in enumerate(revised):
+                if index not in affected:
+                    segment["reuse_from"] = f"{tid}-s{index + 1}"
+                    continue
+                segment.pop("reuse_from", None)
+                local_issues = []
+                for issue in issues:
+                    second = _issue_second(issue.get("at"))
+                    if second is None or segment_for_second(segments, second) == index:
+                        local_issues.append(issue)
+                new_prompt, errs = revise(segment["prompt"], anchor, fixed, local_issues, llm)
+                if new_prompt is None:
+                    rec2 = {"attempt": n, "segment": index + 1, "stop": "revise_failed", "errors": errs}
+                    attempts.append(rec2)
+                    _log(log, rec2)
+                    return {"status": "revise_failed", "attempts": attempts}
+                segment["prompt"] = new_prompt
+            brief["segments"] = revised
+            brief["revision_segments"] = sorted(index + 1 for index in affected)
+        else:
+            new_prompt, errs = revise(brief["prompt"], anchor, fixed, issues, llm)
+            if new_prompt is None:
+                rec2 = {"attempt": n, "stop": "revise_failed", "errors": errs}
+                attempts.append(rec2)
+                _log(log, rec2)
+                return {"status": "revise_failed", "attempts": attempts}
+            brief["prompt"] = new_prompt
         brief["parent"] = tid
         brief["revision_issues"] = issues
     return {"status": "max_attempts", "attempts": attempts}
