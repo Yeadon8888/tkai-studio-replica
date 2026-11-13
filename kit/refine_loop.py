@@ -10,7 +10,7 @@
   6. 用新提示词写下一轮简报，回到第 1 步。
 
 Gemini 只负责"写提示词文字"，不决定通过与否，也不改产品锚点。
-每一轮的提示词、判定、问题都写入 studio/projects/<项目>/refine/<基础简报>.jsonl，便于回看。
+每一轮的提示词、判定、问题都写入运行目录的 refine/<基础简报>.jsonl，便于回看。
 """
 import hashlib
 import json
@@ -25,20 +25,10 @@ sys.path.insert(0, str(KIT))
 import products  # noqa: E402
 
 import settings  # noqa: E402
-from common import parse_json  # noqa: E402
+from common import parse_json, read_anchor, read_json, write_json  # noqa: E402
 
 COST_PER_SECOND = settings.video_price()  # .env：VIDEO_PRICE_CNY_PER_SECOND
 MAX_PROMPT_CHARS = 1500
-
-
-def _read(p):
-    return json.loads(Path(p).read_text(encoding="utf-8"))
-
-
-def _write(p, obj):
-    p = Path(p)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _fix_hints():
@@ -51,7 +41,7 @@ def _fix_hints():
 def collect_issues(project, take_id, decision):
     """把专家的具体问题与闸门的退回原因合成一份修改清单。"""
     rec_path = Path(project) / "reviews" / f"{take_id}.json"
-    rec = _read(rec_path) if rec_path.exists() else {}
+    rec = read_json(rec_path, {})
     hints = _fix_hints()
     out = []
     for e in rec.get("experts", []):
@@ -69,7 +59,7 @@ def failure_causes(project, take_id, decision):
     causes = set((decision or {}).get("vetoes") or [])
     rec_path = Path(project) / "reviews" / f"{take_id}.json"
     if rec_path.exists():
-        rec = _read(rec_path)
+        rec = read_json(rec_path, {})
         for expert in rec.get("experts", []) or []:
             causes.update(i.get("cause") for i in expert.get("issues", []) or [] if i.get("cause"))
     else:
@@ -136,18 +126,20 @@ def revise(prompt, anchor, fixed, issues, llm):
 
 
 def brief_duration(brief):
+    default = settings.get_float("VIDEO_DURATION")
     segments = brief.get("segments") or []
     if segments:
-        return sum(float(s.get("duration", 10)) for s in segments)
-    return float(brief.get("duration", 10))
+        return sum(float(s.get("duration", default)) for s in segments)
+    return float(brief.get("duration", default))
 
 
 def generation_duration(brief):
     """复用段不产生新的视频调用，预算只预留本轮实际要生成的秒数。"""
+    default = settings.get_float("VIDEO_DURATION")
     segments = brief.get("segments") or []
     if segments:
-        return sum(float(s.get("duration", 10)) for s in segments if not s.get("reuse_from"))
-    return float(brief.get("duration", 10))
+        return sum(float(s.get("duration", default)) for s in segments if not s.get("reuse_from"))
+    return float(brief.get("duration", default))
 
 
 def brief_prompt(brief):
@@ -168,8 +160,9 @@ def _issue_second(at):
 
 def segment_for_second(segments, second):
     elapsed = 0.0
+    default = settings.get_float("VIDEO_DURATION")
     for index, segment in enumerate(segments):
-        elapsed += float(segment.get("duration", 10))
+        elapsed += float(segment.get("duration", default))
         if second < elapsed or index == len(segments) - 1:
             return index
     return None
@@ -206,7 +199,7 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
             _log(log, rec)
             return {"status": "budget_stop", "attempts": attempts}
         brief_path = project / "briefs" / f"{tid}.json"
-        _write(brief_path, brief)
+        write_json(brief_path, brief)
         gen(project, brief_path)
         if not (project / "takes" / f"{tid}.mp4").exists():
             rec = {"attempt": n, "take": tid, "stop": "gen_failed"}
@@ -290,8 +283,8 @@ def main(argv=None):
     import loop
     import review_panel
     project = Path(a.project)
-    base = _read(a.brief)
-    anchor = (project / "product_anchor.txt").read_text(encoding="utf-8").strip() if (project / "product_anchor.txt").exists() else ""
+    base = read_json(a.brief, {})
+    anchor = read_anchor(project)
 
     def gen(proj, brief_path):
         loop.cmd_gen(Namespace(project=str(proj), brief=str(brief_path), cap=3, interval=20, max_polls=60,

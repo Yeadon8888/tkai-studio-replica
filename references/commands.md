@@ -13,6 +13,7 @@ python3 doctor.py --online   # 另外确认模型名存在（免费）
 
 ```bash
 python3 products.py create --product <品id> --name "<品名>" --anchor "<锚点>"
+python3 products.py new-run --product <品id> --name "<运行名称>" # 创建 products/<品>/runs/<日期>-<名称>/ 并登记
 python3 products.py status --product <品id>                 # 预算与已花金额
 python3 products.py approve-budget --product <品id> --cny 13 --note "<理由>"
 python3 products.py register-run --product <品id> --run <运行目录名>
@@ -39,7 +40,7 @@ python3 intake.py build     --product <品id> --run <运行目录>
 - `plan` 三选一：`--pick M001,M002`（指定对标）、`--tiers H,M`（指定档位）、`--all`（全部）。只出计划和预计金额，不花钱。结果写到 `products/<品>/plan.json`。
 - H 档计划项带 `needs_confirm: true`。`confirm-tier` 把人工档位与理由写入调研批次的 `tier_overrides.json`；也可把误判的 H 改为 M/L/X。
 - `build` 按 `plan.json` 逐条生成 `<运行目录>/benchmarks/<候选id>.json`。每条复刻项调用一次拆解模型；未确认的 H 档直接跳过。已有对标文件默认不重复调用。
-- 手动对标存为调研批次 `manual-<品id>`，看板可用 `loop.py board --research <该批次>` 显示。
+- 新手动对标存到 `products/<品id>/research/manual/`。旧外部 `manual-<品id>` 批次只读兼容，可把路径显式传给看板。
 
 也可对任意调研批次单独构建一条：
 
@@ -126,17 +127,17 @@ python3 own_script.py brief --script <脚本.json> --project <运行目录>   # 
 
 check 通过（无阻塞项）后才能 brief。示例：`methods/tiktok-script-generator/examples/`。
 
-## 起草、挑错、修订循环
+## 起草与修订循环
 
 ```bash
 python3 draft_prompt.py --brief <简报.json> --project <运行目录> --benchmark <benchmark.json>
-python3 prompt_review.py --script <脚本.json> --project <运行目录> --rounds 3
 python3 refine_loop.py --brief <简报.json> --project <运行目录> --product <品id> --refs <参考图> --attempts 3
 ```
 
 - `draft_prompt.py`：H/M/L 初稿。适配判断为 unfit 时不写入，交给人。
-- `prompt_review.py`：X 档脚本的挑错与修改，结果写到 `<脚本>.reviewed.json`，不覆盖原稿。
 - `refine_loop.py`：会真实生成视频并花钱。每一轮先查品预算。
+
+实验功能（不在主流程）：`prompt_review.py` 可对 X 档脚本做模型挑错与修改，结果写到 `<脚本>.reviewed.json`，不覆盖原稿。
 
 ## 测试
 

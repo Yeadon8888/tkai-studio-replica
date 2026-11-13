@@ -20,6 +20,7 @@ from pathlib import Path
 KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 import settings  # noqa: E402
+from common import read_json, write_json  # noqa: E402
 
 STUDIO = settings.studio_home()
 PRODUCTS = STUDIO / "products"
@@ -32,17 +33,6 @@ def _now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def _read(p, default):
-    p = Path(p)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
-
-
-def _write(p, obj):
-    p = Path(p)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 def product_dir(pid):
     return PRODUCTS / pid
 
@@ -51,7 +41,7 @@ def load(pid):
     p = product_dir(pid) / "product_state.json"
     if not p.exists():
         raise SystemExit(f"没有品 {pid}：先运行 create")
-    return _read(p, {})
+    return read_json(p, {})
 
 
 def create(pid, name, budget_cny=DEFAULT_BUDGET_CNY, anchor=""):
@@ -61,7 +51,7 @@ def create(pid, name, budget_cny=DEFAULT_BUDGET_CNY, anchor=""):
     meta = {"product_id": pid, "name": name, "anchor": anchor, "budget_cny": budget_cny,
             "approved_budget_cny": None, "budget_note": "", "selected_benchmarks": [],
             "runs": [], "created": _now()}
-    _write(d / "product_state.json", meta)
+    write_json(d / "product_state.json", meta)
     _queue_set(pid, stage="scope", status="active", note="新建")
     return meta
 
@@ -70,8 +60,27 @@ def register_run(pid, run_id):
     meta = load(pid)
     if run_id not in meta["runs"]:
         meta["runs"].append(run_id)
-        _write(product_dir(pid) / "product_state.json", meta)
+        write_json(product_dir(pid) / "product_state.json", meta)
     return meta
+
+
+def new_run(pid, name, date=None):
+    """在品目录下创建运行并按目录名登记，避免账本关联规则变化。"""
+    load(pid)  # 先确认品存在
+    name = name.strip()
+    if not name or Path(name).name != name or name in (".", ".."):
+        raise SystemExit("运行名称不能为空，也不能包含路径分隔符")
+    day = date or dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y%m%d")
+    run_id = f"{day}-{name}"
+    run_dir = product_dir(pid) / "runs" / run_id
+    if run_dir.exists():
+        raise SystemExit(f"运行已存在：{run_dir}")
+    run_dir.mkdir(parents=True)
+    write_json(run_dir / "project.json", {
+        "id": run_id, "product_id": pid, "name": name, "created": _now(),
+    })
+    register_run(pid, run_id)
+    return run_dir
 
 
 def approve_budget(pid, cny, note):
@@ -81,7 +90,7 @@ def approve_budget(pid, cny, note):
     meta = load(pid)
     meta["approved_budget_cny"] = float(cny)
     meta["budget_note"] = note
-    _write(product_dir(pid) / "product_state.json", meta)
+    write_json(product_dir(pid) / "product_state.json", meta)
     return meta
 
 
@@ -92,7 +101,7 @@ def select_benchmarks(pid, ids, batch=None):
     for cid in ids:
         if cid not in [x["id"] for x in cur]:
             cur.append({"id": cid, "batch": batch, "selected_at": _now()})
-    _write(product_dir(pid) / "product_state.json", meta)
+    write_json(product_dir(pid) / "product_state.json", meta)
     _queue_set(pid, note=f"已选对标 {len(cur)} 条")
     return cur
 
@@ -127,7 +136,7 @@ def can_spend(pid, cny, ledger_file=None):
 
 
 def _queue_set(pid, stage=None, status=None, note=None):
-    q = _read(QUEUE, {"tasks": {}})
+    q = read_json(QUEUE, {"tasks": {}})
     t = q["tasks"].setdefault(pid, {"stage": "scope", "status": "active", "note": "", "updated": ""})
     if stage:
         t["stage"] = stage
@@ -136,12 +145,12 @@ def _queue_set(pid, stage=None, status=None, note=None):
     if note is not None:
         t["note"] = note
     t["updated"] = _now()
-    _write(QUEUE, q)
+    write_json(QUEUE, q)
     return t
 
 
 def queue_list():
-    q = _read(QUEUE, {"tasks": {}})
+    q = read_json(QUEUE, {"tasks": {}})
     rows = []
     for pid, t in sorted(q["tasks"].items(), key=lambda kv: kv[1].get("updated", "")):
         idx = STAGES.index(t["stage"]) if t["stage"] in STAGES else 0
@@ -167,6 +176,9 @@ def main(argv=None):
     r = sub.add_parser("register-run")
     r.add_argument("--product", required=True)
     r.add_argument("--run", required=True)
+    nr = sub.add_parser("new-run", help="在品目录下新建运行并自动登记")
+    nr.add_argument("--product", required=True)
+    nr.add_argument("--name", required=True)
     sb = sub.add_parser("select", help="记录要复刻的对标（逗号分隔，可多条）")
     sb.add_argument("--product", required=True)
     sb.add_argument("--ids", required=True)
@@ -189,6 +201,8 @@ def main(argv=None):
     elif a.cmd == "register-run":
         register_run(a.product, a.run)
         print("已登记运行", a.run)
+    elif a.cmd == "new-run":
+        print("已创建并登记运行", new_run(a.product, a.name))
     elif a.cmd == "queue":
         if a.set_stage:
             pid, st = a.set_stage

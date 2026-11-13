@@ -1,7 +1,7 @@
 """裂变生成器：一个对标 + 一组方向 → N 条脚本简报（brief）。
 
 不是把对标改写成一条，而是固定对标的核心部分，只在允许的轴上变化。
-规则见 ARCHITECTURE.md §15.7。
+规则见 references/architecture.md。
 
 输入
 - benchmark.json：{benchmark_id, tier, fixed:{...}, prompt_fixed, product_anchor, duration, resolution,
@@ -193,7 +193,7 @@ def fission(bench, dirs, out_dir, n=None):
     if len(variants) < n:
         return {"ok": False, "errors": [f"变化轴的组合只有 {len(variants)} 个，少于 N={n}"]}
     briefs = []
-    dur = bench.get("duration", 10)
+    dur = bench.get("duration", settings.get_float("VIDEO_DURATION"))
     for k, v in enumerate(variants, start=1):
         bid = f"{bench['benchmark_id']}-F{k:02d}"
         brief = {

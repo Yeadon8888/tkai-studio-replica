@@ -32,6 +32,19 @@ class SkillDocsMatchCode(unittest.TestCase):
                 missing.append(f"{script} 没有子命令 {sub}")
         self.assertEqual(missing, [], "文档与代码不一致")
 
+    def test_removed_entry_points_stay_removed(self):
+        help_text = _help("loop.py")
+        self.assertNotIn("select", help_text)
+        self.assertNotIn("produce", help_text)
+        self.assertFalse((KIT / "studio.py").exists())
+
+    def test_board_explains_current_selection_commands(self):
+        import dashboard
+        html = dashboard.render({"research": {"groups": [], "cases": []}}, "测试")
+        self.assertNotIn("selection.json", html)
+        self.assertIn("products.py select", html)
+        self.assertIn("intake.py plan --pick", html)
+
 
 if __name__ == "__main__":
     unittest.main()

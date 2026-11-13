@@ -20,7 +20,7 @@ MODEL_TEXT=<新模型名>
 ```
 MODEL_REVIEW=<新模型名>
 ```
-可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_CRITIC`（给自写脚本挑错）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。留空就沿用 `MODEL_TEXT`。
+可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。留空就沿用 `MODEL_TEXT`。
 
 **换视频模型**（模型名和单价一起改）
 ```
@@ -73,7 +73,7 @@ CREDENTIALS_FILES=~/.config/tokensfactory/credentials.env,~/.config/tikhub/crede
 ```
 STUDIO_HOME=/path/to/data     # products/、ledger/ 的位置；留空 = skill 根目录
 ```
-注意：目前 `products/` 和 `ledger/` 跟随 `STUDIO_HOME`；运行目录（`projects/`）由命令行的 `--project` 指定。
+注意：`products/` 和 `ledger/` 跟随 `STUDIO_HOME`；新运行由 `products.py new-run` 建在 `products/<品>/runs/`。旧 `projects/` 可继续作为只读输入显式传给命令。
 
 ## 换供应方
 

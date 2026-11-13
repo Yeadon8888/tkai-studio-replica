@@ -1,4 +1,4 @@
-"""X 档：自写脚本（不复刻，ARCHITECTURE §15.6）。引导式三步：init → 填写 → check → brief。
+"""X 档：自写脚本（不复刻，见 references/architecture.md）。引导式三步：init → 填写 → check → brief。
 
 - init  ：生成空白脚本骨架（带提示），agent 按提示填写；方法来源 methods/tiktok-script-generator/SKILL.md。
 - check ：计算型自检（不花钱）。把 SKILL 的规则翻译成可核对的条款；阻塞项必须清零才允许 brief。
@@ -21,6 +21,9 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 ROOT = KIT.parents[1]
+sys.path.insert(0, str(KIT))
+import settings  # noqa: E402
+from common import read_anchor  # noqa: E402
 REQUIRED = ["id", "enemy", "symptom", "mechanism", "macro", "macro_reason", "hands",
             "duration", "reveal_product_at_s", "shots"]
 SCENE_WORDS = ("background", "room", "outdoor", "indoor", "kitchen", "bathroom")
@@ -36,17 +39,12 @@ def skeleton(sid):
         "macro": None,
         "macro_reason": "（必填）为什么开启或关闭微观 3D：机制肉眼不可见则开启；纯物理用品则关闭",
         "hands": "single",
-        "duration": 10,
+        "duration": settings.get_float("VIDEO_DURATION"),
         "reveal_product_at_s": None,
         "shots": [{"start": 0, "end": 3, "scene_zh": "", "action_zh": "", "line": "", "tone": "",
                    "image_prompt": "", "video_prompt": ""}],
         "_hint": "按 SKILL.md 顺序填：敌人 → 痛点 → 机制 → Macro → 镜头。check 通过后再 brief。",
     }
-
-
-def _anchor(project):
-    p = Path(project) / "product_anchor.txt"
-    return p.read_text(encoding="utf-8").strip() if p.exists() else ""
 
 
 def check(script, anchor=""):
@@ -128,7 +126,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("init")
     i.add_argument("--id", required=True)
-    i.add_argument("--out", required=True, help="骨架输出路径，例如 projects/<项目>/scripts/<id>.json")
+    i.add_argument("--out", required=True, help="骨架输出路径，例如 <运行目录>/scripts/<id>.json")
     c = sub.add_parser("check")
     c.add_argument("--script", required=True)
     c.add_argument("--project", required=True)
@@ -143,7 +141,7 @@ def main(argv=None):
         print("骨架已写入", out)
         return 0
     script = json.loads(Path(a.script).read_text(encoding="utf-8"))
-    anchor = _anchor(a.project)
+    anchor = read_anchor(a.project)
     res = check(script, anchor)
     for m in res["blocking"]:
         print("阻塞：", m)

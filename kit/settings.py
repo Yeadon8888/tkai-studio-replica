@@ -19,7 +19,7 @@ CONFIG_VERSION = 1
 
 DEFAULTS = {
     "CONFIG_VERSION": "1",
-    # 数据目录（products/、projects/、ledger/）。留空 = skill 根目录。
+    # 数据目录（products/、ledger/；旧 projects/ 只读兼容）。留空 = skill 根目录。
     "STUDIO_HOME": "",
     # 调研批次的根目录（相对路径按 STUDIO_HOME 的上一级解析）。
     "RESEARCH_ROOT": "research/tiktok-benchmark",

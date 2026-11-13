@@ -1,8 +1,9 @@
-"""共享的小工具：时间、JSON 读写、图片转 data URI。被 loop.py、review_panel.py 共用，避免各自再写一份。"""
+"""共享的小工具：时间、JSON、产品锚点、HTTP 与图片 data URI。"""
 import base64
 import datetime as dt
 import json
 import re
+import urllib.request
 from pathlib import Path
 
 CST = dt.timezone(dt.timedelta(hours=8))
@@ -12,13 +13,44 @@ def _now():
     return dt.datetime.now(CST).isoformat(timespec="seconds")
 
 
-def _read(p):
-    return json.loads(Path(p).read_text(encoding="utf-8"))
+def read_json(path, default=None):
+    """读取 JSON；文件不存在时返回 ``default``。"""
+    path = Path(path)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
 
 
-def _write(p, obj):
-    Path(p).parent.mkdir(parents=True, exist_ok=True)
-    Path(p).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+def write_json(path, obj):
+    """创建父目录并以易读格式写入 JSON。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_anchor(directory):
+    """读取目录里的产品锚点；文件不存在时返回空字符串。"""
+    path = Path(directory) / "product_anchor.txt"
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+
+
+def http_json(method, url, headers, body=None, timeout=30):
+    """发送 HTTP 请求并解析 JSON；非 JSON/网络错误原样抛给调用方。"""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8") or "{}")
+
+
+# 兼容已有模块；实现只保留在上面的公开函数中。
+def _read(path):
+    sentinel = object()
+    value = read_json(path, sentinel)
+    if value is sentinel:
+        raise FileNotFoundError(path)
+    return value
+
+
+def _write(path, obj):
+    write_json(path, obj)
 
 
 def _data_uri(path):

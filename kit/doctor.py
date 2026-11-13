@@ -6,17 +6,16 @@
 只报告"有没有"，不打印任何密钥内容。退出码：0 = 全部通过；1 = 有阻塞项。
 """
 import argparse
-import json
 import os
 import shutil
 import sys
-import urllib.request
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 import settings  # noqa: E402
+from common import http_json  # noqa: E402
 
 
 def local_checks():
@@ -51,10 +50,10 @@ def online_checks():
     base = settings.get("TOKENSFACTORY_BASE_URL").rstrip("/")
     key = os.environ.get("TOKENSFACTORY_API_KEY", "")
     try:
-        req = urllib.request.Request(base + "/v1/models", headers={"Authorization": f"Bearer {key}",
-                                                                    "User-Agent": settings.get("HTTP_USER_AGENT")})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            ids = {m.get("id") for m in json.loads(r.read().decode("utf-8")).get("data", [])}
+        data = http_json("GET", base + "/v1/models",
+                         {"Authorization": f"Bearer {key}", "User-Agent": settings.get("HTTP_USER_AGENT")},
+                         timeout=30)
+        ids = {m.get("id") for m in data.get("data", [])}
     except Exception as e:  # 联网检查失败只报告，不抛出
         return [("block", "模型列表 /v1/models", False, f"{type(e).__name__}")]
     rows.append(("block", "模型列表 /v1/models", True, f"{len(ids)} 个模型"))

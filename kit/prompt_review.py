@@ -1,4 +1,4 @@
-"""提示词评审循环：生成 → 计算型自检 → AI 按标准挑毛病 → 修改 → 再检查，最多 N 轮。
+"""实验功能（不在主流程）：提示词评审循环，最多 N 轮。
 
 为什么要这样做：只靠代码拼接或一次性生成，提示词没有被"读一遍"。这里让模型按 config/prompt_critic.yaml 的条款
 逐条挑毛病（每条标 block 或 warn），再按意见修改。计算型检查（own_script.check）每轮都跑，不靠模型。
@@ -18,7 +18,7 @@ STUDIO = KIT.parent
 sys.path.insert(0, str(KIT))
 
 import own_script  # noqa: E402
-from common import parse_json  # noqa: E402
+from common import parse_json, read_anchor  # noqa: E402
 
 CRITERIA_PATH = KIT / "config" / "prompt_critic.yaml"
 LOG_DIR = STUDIO / "methods" / "review_log"
@@ -109,7 +109,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     import loop
     script = json.loads(Path(a.script).read_text(encoding="utf-8"))
-    anchor = own_script._anchor(a.project)
+    anchor = read_anchor(a.project)
     project_name = "prompt-review-" + script.get("id", "script")
 
     def llm(prompt):

@@ -21,7 +21,7 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 from refine_loop import check_revision, MAX_PROMPT_CHARS  # noqa: E402
-from common import parse_json  # noqa: E402
+from common import parse_json, read_anchor  # noqa: E402
 
 DRAFT_TEMPLATE = """你是视频提示词起草员。目标：为我方产品写一条 AI 视频生成的提示词（英文，给 MiniMax H3）。
 
@@ -97,7 +97,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     brief = json.loads(Path(a.brief).read_text(encoding="utf-8"))
     project = Path(a.project)
-    anchor = (project / "product_anchor.txt").read_text(encoding="utf-8").strip()
+    anchor = read_anchor(project)
     bench = json.loads(Path(a.benchmark).read_text(encoding="utf-8")) if a.benchmark else {}
     bench_text = json.dumps({k: bench.get(k) for k in ("source", "tier", "fixed") if k in bench}, ensure_ascii=False)
     fixed_text = json.dumps(bench.get("fixed", {}), ensure_ascii=False)
