@@ -32,7 +32,8 @@
    - 修订循环（`refine_loop`）只重做出问题的那一段，沿用 R4 的逻辑。
    - 某一段的 `remote_url` 失效时，这一段回退到抽帧，并在记录里写明。
    - **看板**：分段（`<id>-s<k>`）归到父成片下面显示，不单独成为系列；父成片的花费等于各段花费之和（不再按"时长 × 单价"另算一份估算，避免重复计价）；父成片下展开可看每段的视频、判定和问题。（2026-11-13 看板实测：两段被当成两个独立系列，父成片又被估算一次 1.3 元，系列合计 3.9 元，实际只花了 2.6 元。）
-6. **文档**：`references/configuration.md`（路线表与价格）、新建 `references/video-models.md`（每个模型能做什么、不能做什么、何时用）、`SKILL.md` 的出提示词与生成步骤补一句"按用途选模型"。
+6. **预算硬检查**：`loop gen` 在提交每个付费任务（含每一段）前，如果运行目录已登记到某个品，就用 `products.can_spend` 检查，不够就停止，不提交。现在只有修订循环检查预算。
+7. **文档**：`references/configuration.md`（路线表与价格）、新建 `references/video-models.md`（每个模型能做什么、不能做什么、何时用）、`SKILL.md` 的出提示词与生成步骤补一句"按用途选模型"。
 
 ## 允许 / 禁止
 允许：`kit/settings.py`、`.env.example`、`kit/loop.py`、`kit/ledger.py`、`kit/keyframe.py`、`kit/production.py`、`kit/dashboard.py`、`kit/review_panel.py`、`kit/refine_loop.py`、`kit/tests/test_video_routes.py`（新建）、`kit/tests/test_core.py`（只改失效断言）、`references/**`、`SKILL.md`。
