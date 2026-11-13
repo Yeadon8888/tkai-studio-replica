@@ -6,6 +6,7 @@
 takes/
 projects/
 research/
+_data/
 # 账本与审计产物含调用记录，只留在本地
 ledger/
 audit/

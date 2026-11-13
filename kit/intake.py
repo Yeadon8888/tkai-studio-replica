@@ -14,6 +14,7 @@
 - plan 只决定"做哪些、各几条"，不花钱。真正出简报与生成仍走 fission / own_script / draft / refine_loop。
 """
 import argparse
+import datetime as dt
 import hashlib
 import json
 import re
@@ -219,7 +220,11 @@ def make_plan(case_list, n, pick=None, tiers=None, use_all=False, max_n=None, pr
         for i, c in enumerate(group):
             cnt = min(max_n, total // len(group) + (1 if i < total % len(group) else 0))
             if cnt:
-                items.append({"id": c["id"], "tier": t, "count": cnt, "route": "replicate", "title": (c.get("title") or "")[:40]})
+                item = {"id": c["id"], "tier": t, "count": cnt, "route": "replicate",
+                        "title": (c.get("title") or "")[:40]}
+                if t == "H":
+                    item["needs_confirm"] = True
+                items.append(item)
     if alloc.get("X"):
         src = [c["id"] for c in by_tier.get("X", [])]
         items.append({"id": "X", "tier": "X", "count": alloc["X"], "route": "own_script",
@@ -254,6 +259,57 @@ def quote_rounds(n, duration=None, price=None, rounds=(1, 2, 3), pass_rate=0.0):
     return out
 
 
+def confirm_tier(pid, candidate_id, tier, note):
+    """记录人工定档。覆盖会在 research.build 中生效，同时作为 H 档构建许可。"""
+    if not note.strip():
+        raise SystemExit("人工确认必须写理由 --note")
+    b = batch_dir(pid)
+    candidates = _read(b / "candidates.json", [])
+    if candidate_id not in [c.get("candidate_id") for c in candidates]:
+        raise SystemExit(f"没有这条对标：{candidate_id}")
+    path = b / "tier_overrides.json"
+    overrides = _read(path, {})
+    overrides[candidate_id] = {"tier": tier, "note": note.strip(),
+                               "confirmed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
+    _write(path, overrides)
+    return overrides[candidate_id]
+
+
+def resolve_run_dir(run):
+    path = Path(run).expanduser()
+    return path.resolve() if path.is_absolute() else settings.studio_home() / "projects" / path
+
+
+def build_plan(pid, run, build_func=None):
+    """把品的 plan.json 中每个裂变项构建成对标文件。未确认 H 档不发起模型调用。"""
+    import benchmark_builder
+    import products
+    plan_path = products.product_dir(pid) / "plan.json"
+    if not plan_path.is_file():
+        raise SystemExit(f"缺少计划：{plan_path}，请先运行 plan")
+    plan = _read(plan_path, {})
+    overrides = _read(batch_dir(pid) / "tier_overrides.json", {})
+    run_dir = resolve_run_dir(run)
+    build_func = build_func or benchmark_builder.build
+    results = []
+    for item in plan.get("items", []):
+        if item.get("route") != "replicate":
+            continue
+        override = overrides.get(item["id"])
+        if item.get("tier") == "H" and not (isinstance(override, dict) and override.get("tier")):
+            results.append({"id": item["id"], "ok": False, "skipped": True,
+                            "message": "H 档尚未人工确认，已跳过"})
+            continue
+        tier = override.get("tier") if isinstance(override, dict) else item["tier"]
+        if tier == "X":
+            results.append({"id": item["id"], "ok": False, "skipped": True,
+                            "message": "人工确认为 X 档，应走自写脚本，已跳过"})
+            continue
+        result = build_func(batch_dir(pid), item["id"], pid, tier, run_dir)
+        results.append({"id": item["id"], **result})
+    return results
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="手动对标：链接或本地文件 → 拆解 → 定档 → 生成计划")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -274,6 +330,14 @@ def main(argv=None):
     pl.add_argument("--tiers", help="指定档位，逗号分隔，如 H,M")
     pl.add_argument("--all", action="store_true")
     pl.add_argument("--pass-rate", type=float, default=0.3, help="估算的单轮通过率，默认 0.3（只用于期望值）")
+    ct = sub.add_parser("confirm-tier", help="人工确认候选档位")
+    ct.add_argument("--product", required=True)
+    ct.add_argument("--id", required=True)
+    ct.add_argument("--tier", required=True, choices=("H", "M", "L", "X"))
+    ct.add_argument("--note", required=True)
+    bu = sub.add_parser("build", help="按 plan.json 生成对标文件")
+    bu.add_argument("--product", required=True)
+    bu.add_argument("--run", required=True)
     a = ap.parse_args(argv)
     pid = a.product
     if a.cmd == "add-file":
@@ -303,6 +367,20 @@ def main(argv=None):
         ]
         _write(products.product_dir(pid) / "plan.json", plan)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
+    elif a.cmd == "confirm-tier":
+        row = confirm_tier(pid, a.id, a.tier, a.note)
+        print(f"{a.id} 已人工确认为 {row['tier']} 档：{row['note']}")
+    elif a.cmd == "build":
+        results = build_plan(pid, a.run)
+        for row in results:
+            if row.get("ok"):
+                print(f"{row['id']} 已生成：{row.get('path')}")
+            elif row.get("skipped"):
+                print(f"{row['id']} {row.get('message')}")
+            else:
+                print(f"{row['id']} 生成失败：{'；'.join(row.get('errors') or [])}")
+        if any(not r.get("ok") and not r.get("skipped") for r in results):
+            return 1
     return 0
 
 

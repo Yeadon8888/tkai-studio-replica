@@ -51,6 +51,7 @@ def build(out_dir):
     cands = _load(out / "candidates.json") or []
     verify = {r["aweme_id"]: r for r in (_load(out / "verify.json") or [])}
     breakdown = {r["aweme_id"]: r for r in (_load(out / "breakdown.json") or [])}
+    tier_overrides = _load(out / "tier_overrides.json") or {}
     cases = []
     for c in cands:
         # 只展示与产品有关的案例（主题强词或弱词）；与产品无关的硬筛通过条目不进看板
@@ -88,6 +89,11 @@ def build(out_dir):
             "relation": c.get("relation"),
         }
         tier, tier_reasons = replication.classify(case)
+        override = tier_overrides.get(case["id"])
+        if isinstance(override, dict) and override.get("tier") in ("H", "M", "L", "X"):
+            tier = override["tier"]
+            note = (override.get("note") or "").strip()
+            tier_reasons = [f"人工确认为 {tier} 档" + (f"：{note}" if note else "")]
         case["tier"] = tier
         case["tier_text"] = replication.TIER_TEXT[tier]
         case["tier_reasons"] = tier_reasons
