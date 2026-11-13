@@ -25,14 +25,21 @@
    - H 档且参考视频有人物、且产品在画面里不重要（简报写明）时，可以走 `replace_person`：参考视频用对标的公开播放地址（过期就刷新），人物图由用户提供或已有素材。产品仍是对标视频里的产品，这一点要在简报和看板上标明"仅换人，未换产品"。
    - `titim`：先查 https://tokensfactory.cc/docs 是否有输入说明；查不到就不接，PR 里说明。
 4. **评审与看板**：评审记录、看板的每条成片显示所用模型与分辨率；成本按模型计价。
-5. **文档**：`references/configuration.md`（路线表与价格）、新建 `references/video-models.md`（每个模型能做什么、不能做什么、何时用）、`SKILL.md` 的出提示词与生成步骤补一句"按用途选模型"。
+5. **多段视频逐段评审**（用户 2026-11-13 确认）：拼接后的长视频是本地文件，模型读不到 GitHub 上的临时地址，只能抽帧、听不到口播。改为：
+   - 每一段生成完成后，用该段任务记录里的 `remote_url`（生成服务自己的地址，模型能读到）做整段视频评审，评审记录按段保存（`reviews/<id>-s<k>.json`）。
+   - 父成片的判定由各段汇总：任一段否决或不通过，整条不通过；问题的时间码换算到整条视频的时间（加上前面各段的时长）。
+   - 另外对拼接后的整条视频做一次机器检查（时长、分辨率、音轨、拼接处有无黑帧或跳帧），不需要模型。
+   - 修订循环（`refine_loop`）只重做出问题的那一段，沿用 R4 的逻辑。
+   - 某一段的 `remote_url` 失效时，这一段回退到抽帧，并在记录里写明。
+6. **文档**：`references/configuration.md`（路线表与价格）、新建 `references/video-models.md`（每个模型能做什么、不能做什么、何时用）、`SKILL.md` 的出提示词与生成步骤补一句"按用途选模型"。
 
 ## 允许 / 禁止
-允许：`kit/settings.py`、`.env.example`、`kit/loop.py`、`kit/ledger.py`、`kit/keyframe.py`、`kit/production.py`、`kit/dashboard.py`、`kit/review_panel.py`（只为记录模型名）、`kit/tests/test_video_routes.py`（新建）、`kit/tests/test_core.py`（只改失效断言）、`references/**`、`SKILL.md`。
+允许：`kit/settings.py`、`.env.example`、`kit/loop.py`、`kit/ledger.py`、`kit/keyframe.py`、`kit/production.py`、`kit/dashboard.py`、`kit/review_panel.py`、`kit/refine_loop.py`、`kit/tests/test_video_routes.py`（新建）、`kit/tests/test_core.py`（只改失效断言）、`references/**`、`SKILL.md`。
 禁止：`kit/config/rubric.yaml`、`kit/config/experts.yaml`、`VERSION`、`CHANGELOG.md`、`.env`、已有数据目录。
 
 ## 验收
 - [ ] 每个路线的请求体有单元测试（用假接口），非法输入在提交前被拦下。
+- [ ] 多段视频逐段评审：单元测试覆盖汇总规则和时间码换算；真实调用时，用 R4 生成的 `projects/20261113-segments-test` 两段（如果 `remote_url` 仍可访问）各做一次整段评审，PR 里写明每段是否真的读到视频（prompt_tokens）和是否听到口播。
 - [ ] 账本按模型和分辨率计价，历史行金额不变。
 - [ ] 真实调用（预算内，见下）各成功 1 条，评审完成，看板显示模型。
 - [ ] 全部测试通过。
