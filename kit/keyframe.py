@@ -197,6 +197,8 @@ def build(project, brief_path, product_reference, edit=request_edit):
         raise
     _append_image_ledger(project.name, new_id, "ok")
     generated = dict(brief)
+    original_keyframe = brief.get("keyframe") if isinstance(brief.get("keyframe"), dict) else {}
+    last_frame = brief.get("last_frame") or original_keyframe.get("last_frame")
     generated.update({
         "id": new_id,
         "parent": brief["id"],
@@ -204,9 +206,14 @@ def build(project, brief_path, product_reference, edit=request_edit):
             str(x) for x in brief.get("images", []) if Path(str(x)).resolve() != product_reference
         ],
         "prompt": IMAGE_ROLE_PREFIX + " " + str(brief.get("prompt") or ""),
+        "first_frame": str(out.resolve()),
         "keyframe": {"prompt": description, "image": str(out.resolve()),
                      "width": dimensions[0], "height": dimensions[1], "model": settings.model("image")},
     })
+    if last_frame:
+        generated["last_frame"] = str(last_frame)
+        generated["video_route"] = "keyframe"
+        generated["prompt"] = str(brief.get("prompt") or "")
     destination = project / "briefs" / f"{new_id}.json"
     _write(destination, generated)
     return destination, out

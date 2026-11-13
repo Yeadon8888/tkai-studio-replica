@@ -95,8 +95,20 @@ def build(path, rubric=None):
             row = {"id": t.get("id"), "attempt": t.get("attempt"), "video": t.get("video"), "note": t.get("note"),
                    "series": t.get("series"), "duration": t.get("duration"), "cost_cny": t.get("cost_cny"),
                    "cost_estimated": t.get("cost_estimated"), "submits": t.get("submits"),
-                   "machine_blocking": t.get("machine_blocking") or [], "prompt": t.get("prompt")}
-            if row["machine_blocking"] and not reviews:
+                   "machine_blocking": t.get("machine_blocking") or [], "prompt": t.get("prompt"),
+                   "model": t.get("model"), "resolution": t.get("resolution"),
+                   "video_route": t.get("video_route"), "route_notice": t.get("route_notice"),
+                   "segments": t.get("segments") or [], "segment_decision": t.get("segment_decision")}
+            if row["segments"] and row["segment_decision"]:
+                explicit = row["segment_decision"]
+                merged = gate.merge_judges(reviews) if reviews else {"scores": {}, "issues": [], "vetoes": []}
+                row.update(scores=merged.get("scores") or {}, vetoes=explicit.get("vetoes") or [],
+                           weighted=explicit.get("weighted"), decision=explicit.get("decision"),
+                           stage=explicit.get("stage"), retry_from=explicit.get("retry_from"),
+                           reason=explicit.get("reason"), low_dimensions=explicit.get("low_dimensions") or [],
+                           issues=[{"cause": i.get("cause"), "at": i.get("at"), "detail": i.get("detail")}
+                                   for i in merged.get("issues", []) if i.get("detail")])
+            elif row["machine_blocking"] and not reviews:
                 row.update(decision="repair", reason="机器检查未通过：" + "；".join(row["machine_blocking"]),
                            vetoes=[], scores={}, issues=[])
             elif not reviews:

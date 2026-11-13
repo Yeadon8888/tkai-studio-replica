@@ -22,15 +22,28 @@ MODEL_REVIEW=<新模型名>
 ```
 可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。留空就沿用 `MODEL_TEXT`。
 
-**换视频模型**（模型名和单价一起改）
+**按用途选择视频模型**
 ```
-MODEL_VIDEO=<新模型名>
-VIDEO_PRICE_CNY_PER_SECOND=<元/秒>
+VIDEO_ROUTE_DEFAULT=minimax-H3
+VIDEO_ROUTE_QUALITY=minimax-H3-cinema
+VIDEO_ROUTE_FAST=minimax-H3-fast
+VIDEO_ROUTE_KEYFRAME=minimax-H3-first-last
+VIDEO_ROUTE_REPLACE_PERSON=minimax_h3_zm_titi
+VIDEO_ROUTE_MOTION=wan2.2-motion
 VIDEO_DURATION=10
 VIDEO_RESOLUTION=768p
 VIDEO_ASPECT=9:16
 ```
-旧账本行的金额不会变：`minimax-H3` 的历史价格保留在 `kit/ledger.py`。
+简报写 `video_route`：`default | quality | fast | keyframe | replace_person | motion`；不写时用 `default`。
+能力、字段和限制见 [视频模型与用途路线](video-models.md)。`MODEL_VIDEO` 与
+`VIDEO_PRICE_CNY_PER_SECOND` 只供旧 `.env` 兼容。
+
+价格表是 JSON，键为公开模型名与基础分辨率，金额单位是人民币元/请求秒：
+```
+VIDEO_PRICES={"minimax-H3":{"768p":0.13},"minimax-H3-cinema":{"480p":0.10,"768p":0.13,"960p":0.23},"minimax-H3-fast":{"480p":0.10,"768p":0.13},"minimax-H3-first-last":{"480p":0.10,"768p":0.13},"minimax_h3_zm_titi":{"768p":0.25}}
+```
+`768p竖`、`768p横` 按 `768p` 查价。没有确认价格的模型不要写入价格表，账本的
+`estimate_cny` 保持 `null`。旧账本已有金额不会重算。
 
 **换首帧图片模型与单张估价**
 ```
@@ -59,6 +72,8 @@ MEDIA_UPLOAD=github_temp      # 无可用 remote_url 时临时上传，评审后
 MEDIA_HOST_REPO=owner/repo    # 用户自己的公开临时媒体仓库
 ```
 设为 `MEDIA_UPLOAD=off` 时，如果任务记录也没有可访问的 `remote_url`，评审回退到抽帧并记录 `mode: frames`。
+多段视频逐段使用各自任务记录的 `remote_url` 评审，父成片只做时长、分辨率、音轨和拼接点机器检查；
+父判定汇总各段，问题时间码会换算成整条视频时间。
 
 模型没有读到视频时（按 token 判断，常见原因是链接会跳转或被托管方限流），这一轮作废，自动改抽帧重评，评审记录写 `video_fallback`。新成片优先用生成服务返回的 `remote_url`，它最可靠。
 

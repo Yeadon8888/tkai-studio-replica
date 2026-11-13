@@ -7,10 +7,11 @@
 密钥：推荐不写进 .env，而是在 CREDENTIALS_FILES 里列出密钥文件的路径（逗号分隔）。
 本模块只把密钥放进进程环境变量，不打印、不写入任何文件。
 
-换模型：改 .env 里的 MODEL_*。换价格：改 VIDEO_PRICE_CNY_PER_SECOND。
+换模型：改 .env 里的 MODEL_* 或 VIDEO_ROUTE_*。视频价格按 VIDEO_PRICES 的模型与分辨率读取。
 换供应方：OpenAI 兼容的接口只需改 *_BASE_URL 与密钥；接口形状不同的，在 providers.py 里加一个适配函数。
 """
 import os
+import json
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
@@ -42,7 +43,22 @@ DEFAULTS = {
     "MODEL_REVISE": "",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
-    # 视频参数与价格
+    # 视频用途路线。MODEL_VIDEO 只作旧配置兼容；默认路线优先读 VIDEO_ROUTE_DEFAULT。
+    "VIDEO_ROUTE_DEFAULT": "minimax-H3",
+    "VIDEO_ROUTE_QUALITY": "minimax-H3-cinema",
+    "VIDEO_ROUTE_FAST": "minimax-H3-fast",
+    "VIDEO_ROUTE_KEYFRAME": "minimax-H3-first-last",
+    "VIDEO_ROUTE_REPLACE_PERSON": "minimax_h3_zm_titi",
+    "VIDEO_ROUTE_MOTION": "wan2.2-motion",
+    # 已确认的人民币元/请求秒。没有确认价格的模型不写，账本记为未知。
+    "VIDEO_PRICES": json.dumps({
+        "minimax-H3": {"768p": 0.13},
+        "minimax-H3-cinema": {"480p": 0.10, "768p": 0.13, "960p": 0.23},
+        "minimax-H3-fast": {"480p": 0.10, "768p": 0.13},
+        "minimax-H3-first-last": {"480p": 0.10, "768p": 0.13},
+        "minimax_h3_zm_titi": {"768p": 0.25},
+    }, separators=(",", ":")),
+    # 视频参数与旧价格配置
     "VIDEO_PRICE_CNY_PER_SECOND": "0.13",
     "IMAGE_PRICE_CNY": "",
     "VIDEO_DURATION": "10",
@@ -138,12 +154,56 @@ def model(role="text"):
     return get(f"MODEL_{role.upper()}") if role in TEXT_ROLES and get(f"MODEL_{role.upper()}") else get("MODEL_TEXT")
 
 
+VIDEO_ROUTE_NAMES = ("default", "quality", "fast", "keyframe", "replace_person", "motion")
+
+
+def video_route_model(route="default"):
+    """用途路线对应的模型。默认路线兼容只配置了旧 MODEL_VIDEO 的 .env。"""
+    if route not in VIDEO_ROUTE_NAMES:
+        raise ValueError(f"未知 video_route：{route}；可选 {', '.join(VIDEO_ROUTE_NAMES)}")
+    if route == "default":
+        file_vals = parse_env_file(env_path())
+        if "VIDEO_ROUTE_DEFAULT" not in file_vals and os.environ.get("VIDEO_ROUTE_DEFAULT") is None \
+                and ("MODEL_VIDEO" in file_vals or os.environ.get("MODEL_VIDEO")):
+            return model("video")
+    return get(f"VIDEO_ROUTE_{route.upper()}")
+
+
+def video_prices():
+    """返回模型 → 基础分辨率 → 元/秒；空项表示价格未知。"""
+    try:
+        value = json.loads(get("VIDEO_PRICES"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("VIDEO_PRICES 必须是 JSON 对象") from exc
+    if not isinstance(value, dict):
+        raise ValueError("VIDEO_PRICES 必须是 JSON 对象")
+    return value
+
+
+def base_resolution(resolution):
+    """把 768p竖、768p横、768p(1:1) 归一为价格表使用的 768p。"""
+    value = str(resolution or "").strip()
+    for name in ("480p", "768p", "960p"):
+        if value.startswith(name):
+            return name
+    return value
+
+
+def video_unit_price(model_name=None, resolution=None):
+    model_name = model_name or video_route_model("default")
+    resolution = base_resolution(resolution or get("VIDEO_RESOLUTION"))
+    value = (video_prices().get(model_name) or {}).get(resolution)
+    return float(value) if value is not None else None
+
+
 def text_models():
     return {model(r) for r in TEXT_ROLES} | {get("MODEL_TEXT")}
 
 
 def video_price():
-    return get_float("VIDEO_PRICE_CNY_PER_SECOND")
+    """旧调用兼容：优先按默认路线与默认分辨率查表，未配置时读旧单价。"""
+    value = video_unit_price()
+    return value if value is not None else get_float("VIDEO_PRICE_CNY_PER_SECOND")
 
 
 def image_price():
@@ -179,4 +239,4 @@ def skill_version():
 def stamp():
     """写进评审记录与日志的版本戳：之后换了模型或规则，能知道某条结果是用什么跑出来的。"""
     return {"skill": skill_version(), "config": get("CONFIG_VERSION"),
-            "models": {"video": model("video"), **{r: model(r) for r in TEXT_ROLES}}}
+            "models": {"video": video_route_model("default"), **{r: model(r) for r in TEXT_ROLES}}}

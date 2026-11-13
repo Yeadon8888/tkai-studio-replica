@@ -9,8 +9,10 @@
 输出：reviews/<take>.json（完整记录）与 reviews/<take>.decision.json（判定结果，供看板和人工决定使用）。
 """
 import argparse
+import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -71,21 +73,144 @@ def machine_checks(video, brief):
         w, h = int(v.get("width", 0)), int(v.get("height", 0))
         dur = float(pr.get("format", {}).get("duration", 0))
         facts.update(width=w, height=h, duration=round(dur, 2), codec=v.get("codec_name"))
-        want = int(str(brief.get("resolution", "768p")).rstrip("p") or 768)
-        if min(w, h) != want:
-            blocking.append(f"短边 {min(w, h)} 与分辨率 {want}p 不符")
+        resolution = str(brief.get("resolution", "768p"))
+        base_resolution = settings.base_resolution(resolution)
+        if base_resolution.endswith("p") and base_resolution[:-1].isdigit():
+            want = int(base_resolution[:-1])
+            if min(w, h) != want:
+                blocking.append(f"短边 {min(w, h)} 与分辨率 {want}p 不符")
+        else:
+            match = re.match(r"(\d+)\*(\d+)px", resolution)
+            if match and {w, h} != {int(match.group(1)), int(match.group(2))}:
+                blocking.append(f"画面 {w}×{h} 与分辨率 {resolution} 不符")
         ar = brief.get("aspect_ratio", "9:16")
         a, b = (int(x) for x in ar.split(":"))
         if w and abs((h / w) - (b / a)) > 0.03 and abs((w / h) - (b / a)) > 0.03:
             blocking.append(f"画面 {w}×{h} 与宽高比 {ar} 不符")
-        want_dur = brief_duration(brief)
-        if abs(dur - want_dur) > 1.0:
-            blocking.append(f"时长 {dur:.1f}s 与简报 {want_dur:g}s 相差超过 1 秒")
+        if brief.get("video_route") != "motion" or brief.get("duration") is not None:
+            want_dur = brief_duration(brief)
+            if abs(dur - want_dur) > 1.0:
+                blocking.append(f"时长 {dur:.1f}s 与简报 {want_dur:g}s 相差超过 1 秒")
     size = Path(video).stat().st_size
     facts["bytes"] = size
     if size < 50_000:
         blocking.append(f"文件只有 {size} 字节，疑似空视频")
     return {"blocking": blocking, "info": info, "facts": facts}
+
+
+def _seam_events(video, joins):
+    """用 ffmpeg 检查拼接点附近的黑帧与异常大场景跳变；返回可复核的事件。"""
+    if not joins:
+        return []
+    cmd = ["ffmpeg", "-hide_banner", "-v", "info", "-i", str(video), "-vf",
+           "blackdetect=d=0.04:pic_th=0.98,select='gt(scene,0.85)',metadata=print", "-an", "-f", "null", "-"]
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    events = []
+    for match in re.finditer(r"black_start:([0-9.]+).*?black_end:([0-9.]+)", result.stderr):
+        start, end = float(match.group(1)), float(match.group(2))
+        if any(start - 0.15 <= point <= end + 0.15 for point in joins):
+            events.append({"kind": "black", "at": round((start + end) / 2, 3)})
+    for match in re.finditer(r"pts_time:([0-9.]+)[\s\S]{0,240}?lavfi\.scene_score=([0-9.]+)", result.stderr):
+        at, score = float(match.group(1)), float(match.group(2))
+        if any(abs(at - point) <= 0.15 for point in joins):
+            events.append({"kind": "jump", "at": round(at, 3), "score": round(score, 3)})
+    return events
+
+
+def concat_machine_checks(video, brief):
+    """父成片只做本地检查：基础媒体属性、音轨和各拼接点。"""
+    result = machine_checks(video, brief)
+    if not Path(video).exists():
+        return result
+    probe = _probe(video)
+    has_audio = any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
+    result["facts"]["has_audio"] = has_audio
+    if not has_audio:
+        result["blocking"].append("拼接成片没有音轨")
+    durations = [float(s.get("duration", settings.get_float("VIDEO_DURATION"))) for s in brief.get("segments") or []]
+    elapsed, joins = 0.0, []
+    for duration in durations[:-1]:
+        elapsed += duration
+        joins.append(elapsed)
+    events = _seam_events(video, joins)
+    result["facts"]["joins"] = joins
+    result["facts"]["seam_events"] = events
+    for event in events:
+        label = "黑帧" if event["kind"] == "black" else "疑似跳帧"
+        result["blocking"].append(f"拼接处 {event['at']:.2f}s 检出{label}")
+    return result
+
+
+def _offset_timecode(value, offset):
+    if not value or not offset:
+        return value
+    def replace(match):
+        seconds = int(match.group(1) or 0) * 60 + float(match.group(2)) + offset
+        minute = int(seconds // 60)
+        remain = seconds % 60
+        return f"{minute:02d}:{remain:04.1f}" if not remain.is_integer() else f"{minute:02d}:{int(remain):02d}"
+    return re.sub(r"(?:(\d+):)?(\d+(?:\.\d+)?)", replace, str(value))
+
+
+def aggregate_segment_reviews(project, take, segment_ids, brief):
+    """汇总逐段评审；任一段不通过则父成片不通过，问题时间码平移到整条视频。"""
+    project = Path(project)
+    machine = concat_machine_checks(project / "takes" / f"{take}.mp4", brief)
+    offset, segment_rows, experts, decisions = 0.0, [], [], []
+    durations = [float(s.get("duration", settings.get_float("VIDEO_DURATION"))) for s in brief.get("segments") or []]
+    for index, sid in enumerate(segment_ids):
+        rec_path = project / "reviews" / f"{sid}.json"
+        rec = _read(rec_path) if rec_path.exists() else {}
+        job_path = project / "jobs" / f"{sid}.json"
+        job = _read(job_path) if job_path.exists() else {}
+        decision = rec.get("decision") or {"decision": None, "reason": "该段没有评审记录"}
+        decisions.append(decision)
+        shifted = []
+        for expert in rec.get("experts") or []:
+            item = copy.deepcopy(expert)
+            item.setdefault("judge", {})["segment"] = sid
+            for issue in item.get("issues") or []:
+                issue["segment"] = sid
+                issue["at"] = _offset_timecode(issue.get("at"), offset)
+            shifted.append(item)
+        experts.extend(shifted)
+        segment_rows.append({"id": sid, "offset": offset, "duration": durations[index],
+                             "mode": rec.get("mode"), "video_fallback": rec.get("video_fallback"),
+                             "model": job.get("model"), "resolution": job.get("resolution"),
+                             "video_route": job.get("video_route"),
+                             "decision": decision, "experts": shifted})
+        offset += durations[index]
+
+    statuses = [d.get("decision") for d in decisions]
+    vetoes = sorted({v for d in decisions for v in (d.get("vetoes") or [])})
+    lows = sorted({v for d in decisions for v in (d.get("low_dimensions") or [])})
+    weights = [d.get("weighted") for d in decisions if isinstance(d.get("weighted"), (int, float))]
+    if machine["blocking"]:
+        decision = {"attempt": brief.get("attempt", 1), "decision": "repair", "stage": "glitches",
+                    "retry_from": "generate", "reason": "父成片机器检查未通过：" + "；".join(machine["blocking"]),
+                    "weighted": min(weights) if weights else None, "low_dimensions": lows, "vetoes": vetoes}
+    elif statuses and all(value == "pass" for value in statuses):
+        decision = {"attempt": brief.get("attempt", 1), "decision": "pass", "stage": "pass",
+                    "reason": "所有分段均通过，父成片机器检查通过", "weighted": min(weights) if weights else None,
+                    "low_dimensions": lows, "vetoes": vetoes}
+    elif any(value == "repair" for value in statuses):
+        failed = [segment_ids[i] for i, value in enumerate(statuses) if value != "pass"]
+        decision = {"attempt": brief.get("attempt", 1), "decision": "repair", "stage": "segments",
+                    "retry_from": "generate", "reason": "以下分段未通过：" + "、".join(failed),
+                    "weighted": min(weights) if weights else None, "low_dimensions": lows, "vetoes": vetoes}
+    else:
+        decision = {"attempt": brief.get("attempt", 1), "decision": None,
+                    "reason": "至少一段评审未完成或需人工处理", "weighted": min(weights) if weights else None,
+                    "low_dimensions": lows, "vetoes": vetoes}
+    parent_job_path = project / "jobs" / f"{take}.json"
+    parent_job = _read(parent_job_path) if parent_job_path.exists() else {}
+    record = {"take": take, "attempt": brief.get("attempt", 1), "mode": "segments", "machine": machine,
+              "generation": {"model": parent_job.get("model"), "resolution": parent_job.get("resolution"),
+                             "video_route": parent_job.get("video_route")},
+              "segments": segment_rows, "experts": experts, "decision": decision, "versions": settings.stamp()}
+    _write(project / "reviews" / f"{take}.json", record)
+    _write(project / "reviews" / f"{take}.decision.json", decision)
+    return decision
 
 
 def frame_times(n, duration):
@@ -218,11 +343,13 @@ def _reachable(url):
     return False
 
 
-def _video_source(project, take, video):
+def _video_source(project, take, video, brief=None):
     job_path = project / "jobs" / f"{take}.json"
     job = _read(job_path) if job_path.exists() else {}
     if _reachable(job.get("remote_url")):
         return "video", job["remote_url"], None
+    if job.get("remote_url") and (brief or {}).get("segment_of"):
+        return "frames", None, None
     if settings.get("MEDIA_UPLOAD") == "off":
         return "frames", None, None
     info = media_host.upload(video)
@@ -270,6 +397,10 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
     mc = machine_checks(video, brief)
     record = {"take": take, "attempt": attempt, "mode": "video", "machine": mc,
               "experts": [], "versions": settings.stamp()}
+    job_path = project / "jobs" / f"{take}.json"
+    job = _read(job_path) if job_path.exists() else {}
+    record["generation"] = {"model": job.get("model"), "resolution": job.get("resolution"),
+                            "video_route": job.get("video_route")}
     if mc["blocking"]:
         # 计算型阻塞：不花钱调用专家，直接退回生成
         decision = {"attempt": attempt, "decision": "repair", "stage": "glitches", "retry_from": "generate",
@@ -279,8 +410,10 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
         _write(project / "reviews" / f"{take}.json", record)
         _write(project / "reviews" / f"{take}.decision.json", decision)
         return decision
-    mode, video_url, upload_info = _video_source(project, take, video)
+    mode, video_url, upload_info = _video_source(project, take, video, brief)
     record["mode"] = mode
+    if mode == "frames" and job.get("remote_url") and brief.get("segment_of"):
+        record["video_fallback"] = "分段 remote_url 已失效，已改用抽帧；声音不可用"
     frames = loop._frames(video, project / "reviews" / "frames" / take) if mode == "frames" else []
     cfg = load_experts(experts_path)
     refs_p = [Path(p) for p in refs]

@@ -27,7 +27,7 @@ import products  # noqa: E402
 import settings  # noqa: E402
 from common import parse_json, read_anchor, read_json, write_json  # noqa: E402
 
-COST_PER_SECOND = settings.video_price()  # .env：VIDEO_PRICE_CNY_PER_SECOND
+COST_PER_SECOND = settings.video_price()  # 旧测试兼容；真实预算按路线与分辨率计算
 MAX_PROMPT_CHARS = 1500
 
 
@@ -142,6 +142,22 @@ def generation_duration(brief):
     return float(brief.get("duration", default))
 
 
+def generation_cost(brief):
+    """本轮实际生成段按各自路线计价；价格未知时停止，不能绕过预算硬检查。"""
+    segments = brief.get("segments") or []
+    items = [s for s in segments if not s.get("reuse_from")] if segments else [brief]
+    total = 0.0
+    for item in items:
+        route = item.get("video_route", brief.get("video_route", "default"))
+        model = settings.video_route_model(route)
+        resolution = item.get("resolution", brief.get("resolution", settings.get("VIDEO_RESOLUTION")))
+        price = settings.video_unit_price(model, resolution)
+        if price is None:
+            raise SystemExit(f"{model} / {resolution} 价格未知，无法检查修订预算")
+        total += float(item.get("duration", settings.get_float("VIDEO_DURATION"))) * price
+    return total
+
+
 def brief_prompt(brief):
     if brief.get("segments"):
         return "\n".join(s.get("prompt", "") for s in brief["segments"])
@@ -191,7 +207,7 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
     for n in range(1, max_attempts + 1):
         tid = f"{base}-a{n}"
         brief["id"] = tid
-        cost = generation_duration(brief) * COST_PER_SECOND
+        cost = generation_cost(brief)
         ok, state = products.can_spend(pid, cost)
         if not ok:
             rec = {"attempt": n, "take": tid, "stop": "budget", "spent": state["spent_cny"], "limit": state["limit_cny"]}
@@ -288,9 +304,12 @@ def main(argv=None):
 
     def gen(proj, brief_path):
         loop.cmd_gen(Namespace(project=str(proj), brief=str(brief_path), cap=3, interval=20, max_polls=60,
-                               no_review=True, review_skip_reason="由 refine_loop 下一步评审"))
+                               no_review=False, review_skip_reason=""))
 
     def review(proj, tid, refs):
+        decision_path = Path(proj) / "reviews" / f"{tid}.decision.json"
+        if decision_path.exists():
+            return read_json(decision_path, {})
         return review_panel.review_take(str(proj), tid, refs)
 
     def llm(prompt):
