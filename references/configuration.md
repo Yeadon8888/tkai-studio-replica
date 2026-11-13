@@ -32,6 +32,13 @@ VIDEO_ASPECT=9:16
 ```
 旧账本行的金额不会变：`minimax-H3` 的历史价格保留在 `kit/ledger.py`。
 
+**换首帧图片模型与单张估价**
+```
+MODEL_IMAGE=gpt-image-2
+IMAGE_PRICE_CNY=
+```
+`MODEL_IMAGE` 用于产品首帧的文件编辑接口。`IMAGE_PRICE_CNY` 是人工确认的单张人民币估价；价格未知时留空，账本的 `estimate_cny` 记为 `null`。使用方法和风险见 [产品首帧路线](keyframe.md)。
+
 **改预算与上限**
 ```
 PRODUCT_BUDGET_CNY=5          # 每个品的默认预算
