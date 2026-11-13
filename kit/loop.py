@@ -70,7 +70,7 @@ class VideoNotIngested(RuntimeError):
 
 
 def video_ingested(parts, usage):
-    """按用量判断视频是否被读到：去掉文字 token 和每张图约 1200 token 后，至少还要有 VIDEO_MIN_TOKENS。
+    """按用量判断视频是否被读到：去掉文字 token 和每张图约 1100 token 后，至少还要有 VIDEO_MIN_TOKENS。
     用量里没有明细时返回 None（无法判断）。"""
     if not any(p.get("type") == "video_url" for p in parts):
         return True
@@ -78,7 +78,7 @@ def video_ingested(parts, usage):
     if "text_tokens" not in details or "prompt_tokens" not in (usage or {}):
         return None
     n_img = sum(1 for p in parts if p.get("type") == "image_url")
-    rest = usage["prompt_tokens"] - details["text_tokens"] - 1200 * n_img
+    rest = usage["prompt_tokens"] - details["text_tokens"] - 1100 * n_img
     return rest >= settings.get_int("VIDEO_MIN_TOKENS")
 
 
