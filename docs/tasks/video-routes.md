@@ -1,7 +1,7 @@
 # 任务书 R7：按用途选择 MiniMax H3 系列模型（高画质、首尾帧、人物替换等）
 
 分支：`feat/video-routes` · 负责人：Codex · 审核：Claude
-**前置**：`main` 已包含 R4（多段）与 R5（首帧）。动手前 `git pull`，确认 `kit/keyframe.py` 存在、`grep -n segments kit/loop.py` 有结果；否则停下说明。读 `~/.claude/skills/tokensfactory-media/SKILL.md` 与 `references/models.md`、`references/api.md` 中 H3 系列的输入格式。视频生成走 TokensFactory（见 `AGENTS.md`）。
+**前置**：`main` 已包含 R4（多段）、R5（首帧）与 R6（清理）。动手前 `git pull`，确认 `kit/keyframe.py` 存在、`kit/studio.py` 已删除；否则停下说明。读 `~/.claude/skills/tokensfactory-media/SKILL.md` 与 `references/models.md`、`references/api.md` 中 H3 系列的输入格式。视频生成走 TokensFactory（见 `AGENTS.md`）。
 
 ## 背景
 账户里可用的视频模型（`/v1/models` 2026-11-13）：`minimax-H3`、`minimax-H3-cinema`、`minimax-H3-fast`、`minimax-H3-first-last`、`minimax_h3_zm_titi`、`minimax_h3_zm_titim`、`wan2.2-motion`、`wan3`。现在代码只会调用 `minimax-H3`，其它能力用不上：
