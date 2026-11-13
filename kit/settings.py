@@ -33,7 +33,7 @@ DEFAULTS = {
     "TIKHUB_BASE_URL": "https://api.tikhub.io",
     "HTTP_USER_AGENT": "TokensFactory-Media/1.1",
     # 模型：MODEL_TEXT 是默认的文本/理解模型；各环节留空则沿用它。
-    "MODEL_TEXT": "gemini-3.8-flash",
+    "MODEL_TEXT": "gemini-3.8-flash-low",  # 2026-11-13 实测：gemini-3.8-flash 读不到视频，-low 能读到画面与声音
     "MODEL_VERIFY": "",
     "MODEL_BREAKDOWN": "",
     "MODEL_DRAFT": "",
