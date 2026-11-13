@@ -31,6 +31,21 @@ import loop  # noqa: E402  (提供 gemini()、_frames()、_data_uri())
 EXPERTS_PATH = os.path.join(KIT, "config", "experts.yaml")
 
 
+def brief_duration(brief):
+    segments = brief.get("segments") or []
+    if segments:
+        return sum(float(s.get("duration", 10)) for s in segments)
+    return float(brief.get("duration", 10))
+
+
+def brief_text(brief):
+    if brief.get("summary"):
+        return brief["summary"]
+    if brief.get("segments"):
+        return "\n".join(f"第 {i} 段：{s.get('prompt', '')}" for i, s in enumerate(brief["segments"], 1))
+    return brief.get("prompt", "")
+
+
 def load_experts(path=EXPERTS_PATH):
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -62,7 +77,7 @@ def machine_checks(video, brief):
         a, b = (int(x) for x in ar.split(":"))
         if w and abs((h / w) - (b / a)) > 0.03 and abs((w / h) - (b / a)) > 0.03:
             blocking.append(f"画面 {w}×{h} 与宽高比 {ar} 不符")
-        want_dur = float(brief.get("duration", 10))
+        want_dur = brief_duration(brief)
         if abs(dur - want_dur) > 1.0:
             blocking.append(f"时长 {dur:.1f}s 与简报 {want_dur:g}s 相差超过 1 秒")
     size = Path(video).stat().st_size
@@ -120,10 +135,10 @@ def _expert_prompt(exp, brief, anchor, timecode_text="", audio_available=True):
                         .replace("完整观看视频并真正听声音。", "当前是抽帧回退，只按给定帧判断，声音不可用。"))
     focus = (exp["focus"].strip()
              .replace("{must_keep}", must_keep_text(brief))
-             .replace("{duration}", f"{float(brief.get('duration', 10)):g}")
+             .replace("{duration}", f"{brief_duration(brief):g}")
              .replace("{audio_rule}", audio_rule(brief, audio_available)))
     return (exp["prompt"]
-            .replace("{brief}", (brief.get("summary") or brief.get("prompt", ""))[:800])
+            .replace("{brief}", brief_text(brief)[:800])
             .replace("{anchor}", anchor or "（简报未提供锚点）")
             .replace("{frame_times}", timecode_text or "按整条视频实际时间填写，格式 00:05 或 00:05–00:07")
             .replace("{timecode_rule}", timecode_text or "按整条视频实际时间填写，格式 00:05 或 00:05–00:07")
@@ -158,7 +173,7 @@ def _normalize_checks(obj):
 
 def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, frames=None):
     frames = frames or []
-    ft = frame_times(len(frames), float(brief.get("duration", 10))) if frames else ""
+    ft = frame_times(len(frames), brief_duration(brief)) if frames else ""
     prompt = _expert_prompt(exp, brief, anchor, ft, audio_available=bool(video_url))
     suffix = "\n前面是产品参考图，最后是整条成片。请完整观看并按实际时间写时间码。" if video_url \
         else "\n前面是产品参考图，后面是成片抽帧（按时间顺序）；声音不可用。"

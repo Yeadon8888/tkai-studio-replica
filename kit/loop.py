@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -179,7 +180,7 @@ def _api(method, path, body=None):
         return json.loads(r.read().decode("utf-8") or "{}")
 
 
-def cmd_gen(a):
+def _generate_single(a):
     project = Path(a.project)
     brief = _read(a.brief)
     tid = brief["id"]
@@ -283,6 +284,143 @@ def cmd_gen(a):
     print(f"{tid} 轮询超时，任务仍在：{job['task_id']}，先查原任务，不重提")
 
 
+def _segment_brief(brief, segment, segment_id):
+    """把父简报的一段展开成现有单段生成逻辑可读的简报。"""
+    child = {k: v for k, v in brief.items() if k not in ("id", "prompt", "duration", "images", "segments")}
+    child.update({"id": segment_id, "prompt": segment["prompt"],
+                  "duration": segment.get("duration", 10),
+                  "images": segment.get("images", brief.get("images", []))})
+    return child
+
+
+def _brief_images(brief):
+    images = list(brief.get("images") or [])
+    for segment in brief.get("segments") or []:
+        images.extend(segment.get("images") or [])
+    return list(dict.fromkeys(images))
+
+
+def brief_duration(brief):
+    segments = brief.get("segments") or []
+    if segments:
+        return sum(float(s.get("duration", 10)) for s in segments)
+    return float(brief.get("duration", 10))
+
+
+def _probe_for_concat(video):
+    raw = subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-show_format",
+                                   "-of", "json", str(video)])
+    data = json.loads(raw.decode("utf-8"))
+    video_stream = next(s for s in data["streams"] if s.get("codec_type") == "video")
+    has_audio = any(s.get("codec_type") == "audio" for s in data["streams"])
+    duration = float(data.get("format", {}).get("duration", 0))
+    return video_stream, has_audio, duration
+
+
+def concat_segments(videos, output):
+    """统一画面、帧率和音轨后拼接；ffmpeg 失败时抛错，不留下半成品。"""
+    videos = [Path(v) for v in videos]
+    if not videos:
+        raise ValueError("没有可拼接的视频段")
+    probes = [_probe_for_concat(v) for v in videos]
+    first = probes[0][0]
+    width, height = int(first["width"]), int(first["height"])
+    frame_rate = first.get("avg_frame_rate") or first.get("r_frame_rate") or "24/1"
+    cmd = ["ffmpeg", "-v", "error", "-y"]
+    for video in videos:
+        cmd += ["-i", str(video)]
+    silent_inputs = {}
+    for i, (_, has_audio, duration) in enumerate(probes):
+        if not has_audio:
+            silent_inputs[i] = len(videos) + len(silent_inputs)
+            cmd += ["-f", "lavfi", "-t", f"{duration:.6f}", "-i", "anullsrc=r=48000:cl=stereo"]
+    filters = []
+    concat_inputs = []
+    for i, (_, has_audio, _) in enumerate(probes):
+        filters.append(f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                       f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={frame_rate},"
+                       f"format=yuv420p[v{i}]")
+        audio_input = i if has_audio else silent_inputs[i]
+        filters.append(f"[{audio_input}:a]aresample=48000,aformat=sample_fmts=fltp:"
+                       f"sample_rates=48000:channel_layouts=stereo[a{i}]")
+        concat_inputs.append(f"[v{i}][a{i}]")
+    filters.append("".join(concat_inputs) + f"concat=n={len(videos)}:v=1:a=1[v][a]")
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temp = output.with_name(output.stem + ".joining.mp4")
+    try:
+        subprocess.run(cmd + ["-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]",
+                              "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(temp)],
+                       check=True)
+        temp.replace(output)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def cmd_gen(a):
+    project = Path(a.project)
+    brief = _read(a.brief)
+    segments = brief.get("segments") or []
+    if not segments:
+        return _generate_single(a)
+    tid = brief["id"]
+    if len(segments) > a.cap:
+        sys.exit(f"分段数 {len(segments)} 超过本次生成上限 {a.cap}")
+    if not all(isinstance(s, dict) and s.get("prompt") for s in segments):
+        sys.exit("segments 每一段都必须包含非空 prompt")
+    (project / "briefs").mkdir(parents=True, exist_ok=True)
+    (project / "takes").mkdir(parents=True, exist_ok=True)
+    (project / "jobs").mkdir(parents=True, exist_ok=True)
+    segment_videos = []
+    segment_ids = []
+    for index, segment in enumerate(segments, 1):
+        sid = f"{tid}-s{index}"
+        segment_ids.append(sid)
+        out = project / "takes" / f"{sid}.mp4"
+        reuse_from = segment.get("reuse_from")
+        if reuse_from and not out.exists():
+            source = project / "takes" / f"{reuse_from}.mp4"
+            if not source.exists():
+                print(f"{sid} 要复用的段不存在：{source}，停止且不拼接")
+                return
+            shutil.copy2(source, out)
+            _write(project / "jobs" / f"{sid}.json",
+                   {"id": sid, "status": "reused", "reuse_from": reuse_from,
+                    "video": str(out), "saved_at": _now()})
+            print(f"{sid} 已复用 {reuse_from}")
+        elif not out.exists():
+            child_path = project / "briefs" / f"{sid}.json"
+            _write(child_path, _segment_brief(brief, segment, sid))
+            child_args = argparse.Namespace(**vars(a))
+            child_args.brief = str(child_path)
+            child_args.no_review = True
+            child_args.review_skip_reason = f"分段 {sid}，等待父成片 {tid} 拼接后统一评审"
+            _generate_single(child_args)
+        if not out.exists():
+            print(f"{sid} 未生成成功，停止且不拼接；已成功的视频段保留")
+            return
+        segment_videos.append(out)
+    final = project / "takes" / f"{tid}.mp4"
+    final.unlink(missing_ok=True)
+    try:
+        concat_segments(segment_videos, final)
+    except (OSError, ValueError, subprocess.CalledProcessError) as e:
+        sys.exit(f"{tid} 分段拼接失败：{type(e).__name__}，未生成成片")
+    parent_job = {"id": tid, "status": "saved", "video": str(final), "segments": segment_ids,
+                  "duration": brief_duration(brief), "saved_at": _now()}
+    _write(project / "jobs" / f"{tid}.json", parent_job)
+    print(f"{tid} 已拼接 {len(segment_videos)} 段 → {final}")
+    if getattr(a, "no_review", False):
+        parent_job.update(review_skipped=True,
+                          review_skip_reason=getattr(a, "review_skip_reason", "命令行指定 --no-review"))
+    else:
+        import review_panel
+        review_panel.review_take(project, tid, _brief_images(brief))
+        parent_job.update(review_skipped=False, reviewed_at=_now())
+    _write(project / "jobs" / f"{tid}.json", parent_job)
+
+
 # ---------------------------------------------------------------- 3. 评审
 
 def _frames(video, out_dir, n=8):
@@ -353,7 +491,13 @@ def cmd_assemble(a):
             else:
                 reviews = rec or []
             cost = costs.get(tid)
-            dur = float(b.get("duration", settings.get_float("VIDEO_DURATION")))
+            if b.get("segments"):
+                segment_costs = [costs.get(f"{tid}-s{i}") for i in range(1, len(b["segments"]) + 1)]
+                paid = [c for c in segment_costs if c]
+                if paid:
+                    cost = {"cny": round(sum(c["cny"] for c in paid), 4),
+                            "submits": sum(c["submits"] for c in paid)}
+            dur = brief_duration(b) if b.get("segments") else float(b.get("duration", settings.get_float("VIDEO_DURATION")))
             takes.append({"id": tid, "attempt": b.get("attempt", 1), "note": b.get("summary", "")[:120],
                           "video": f"takes/{tid}.mp4" if vp.exists() else None,
                           "series": series_root(b["id"], parents), "duration": dur,
