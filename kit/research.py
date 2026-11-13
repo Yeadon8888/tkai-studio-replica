@@ -10,6 +10,7 @@
 import json
 from pathlib import Path
 
+import covers
 import replication
 
 
@@ -65,7 +66,9 @@ def build(out_dir):
             "title": (c.get("desc") or "")[:80],
             "author": c.get("author"),
             "url": c.get("url"),
-            "cover": c.get("cover_url"),
+            # 优先内嵌本地封面（不会过期）；没有本地封面才用原始地址（可能已过期）
+            "cover": covers.data_uri(out, c) or c.get("cover_url"),
+            "cover_local": bool(covers.data_uri(out, c)),
             "group": _group(c, v),
             "metrics": {
                 "plays": c.get("plays"), "likes": c.get("likes"), "comments": c.get("comments"),

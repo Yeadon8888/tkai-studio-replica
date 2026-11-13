@@ -49,6 +49,16 @@ python3 benchmark_builder.py --batch <调研批次> --id M001 --product <品id> 
 
 链接候选使用第一个可访问的 `play_urls`；本地候选临时上传，调用后立即删除。生成结果必须通过 `fission.check_inputs` 才会写入。
 
+## 封面（`covers.py`）
+
+TikTok 封面地址会过期。调研和手动登记时会自动把封面存到批次的 `covers/`，看板内嵌图片。旧批次补封面：
+
+```bash
+python3 covers.py backfill --batch <调研批次目录> --refresh
+```
+
+`--refresh`：封面已过期时用分享链接向 TikHub 刷新一次（每条 1 次请求）。只存封面图片，不下载视频。
+
 ## 调研（`tt_research.py`）
 
 ```bash

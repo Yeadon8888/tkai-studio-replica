@@ -511,6 +511,12 @@ def cmd_filter(a, client):
     creator_list.sort(key=lambda d: (-d["final_videos"], -(d["followers"] or 0)))
     write_json(out / "creators.json", creator_list)
 
+    # 封面地址刚拿到、还没过期：顺手存到本地（只存看板会展示的候选，不额外请求 TikHub）
+    try:
+        import covers
+        covers.cache_batch(out, refresh=False, only_shown=True, cands=cands)
+    except Exception as e:  # noqa: BLE001  封面失败不影响调研结果
+        print(f"封面保存失败（不影响候选清单）：{type(e).__name__}")
     write_json(out / "candidates.json", cands)
     cols = ["candidate_id", "aweme_id", "url", "author", "author_followers", "viral_type", "play_per_follower",
             "sources", "desc", "published_at_cst", "age_days", "duration_s", "optimal_length", "plays", "likes",

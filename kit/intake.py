@@ -68,6 +68,11 @@ def register(pid, cand, relation):
                 final_pass=True, topic_pass=True, topic_level="analogy" if relation == "different" else "strong",
                 relation=relation)
     cands.append(cand)
+    try:  # 手动对标：立即保存封面（链接下载封面图，本地视频截一帧）
+        import covers
+        covers.cache(b, cand, refresh=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"封面保存失败（不影响登记）：{type(e).__name__}")
     _write(b / "candidates.json", cands)
     ver = [v for v in _read(b / "verify.json", []) if v["aweme_id"] != cand["aweme_id"]]
     ver.append(verify_row(cand, relation))

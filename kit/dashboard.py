@@ -121,7 +121,7 @@ function renderResearch(){
     const checked = sel.has(c.id) ? 'checked' : '';
     const why = ok ? '' : `<span class="muted">不可进入制作：${esc((c.block_reasons||[]).join('；'))}</span>`;
     return `<article class="card" data-case="${esc(c.id)}">
-      <div class="thumb">${c.cover ? `<img src="${esc(c.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="" onerror="this.remove()">` : ''}<span class="muted">封面链接可能已过期</span></div>
+      <div class="thumb">${c.cover ? `<img src="${esc(c.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="" onerror="this.remove()">` : ''}${c.cover ? (c.cover_local ? '' : '<span class="muted">封面链接可能已过期，运行 covers.py backfill 补封面</span>') : '<span class="muted">没有封面</span>'}</div>
       <div class="body"><span class="tag tier-${esc(c.tier||'X')}">${esc(c.tier||'X')} 档</span> <span class="tag">${esc(c.group)}</span>${ok ? '<span class="tag pass">可进入制作</span>' : ''}<h3>${esc(c.title || c.id)}</h3>
       <span class="muted">@${esc(c.author||'未提供')} · 播放 ${fmt(c.metrics?.plays)} · 赞 ${fmt(c.metrics?.likes)}</span>
       <span class="muted">来源：${c.source === 'manual' ? (c.local_file ? '本地文件 ' + esc(c.local_file) : '手动链接 ' + esc(c.url||'')) : '调研（TikHub）' + (c.url ? ' · ' + esc(c.url) : '')}</span>
