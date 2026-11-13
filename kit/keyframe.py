@@ -167,6 +167,34 @@ def _append_image_ledger(project, ref, status):
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def generate_frame(project, frame_id, product_reference, description, aspect_ratio=None, edit=request_edit):
+    """为一个分段生成锁定真实产品的关键帧；同一 ``frame_id`` 永不重复提交。"""
+    project = Path(project)
+    product_reference = Path(product_reference).resolve()
+    if not product_reference.is_file():
+        raise FileNotFoundError(f"产品参考图不存在：{product_reference}")
+    aspect = aspect_ratio or settings.get("VIDEO_ASPECT")
+    out = project / "keyframes" / f"{frame_id}.png"
+    if out.exists():
+        raise FileExistsError(f"{frame_id} 已存在，为避免重复付费不再提交")
+    prompt = (
+        "以上传图片中的产品为唯一产品参考，严格保留形状、颜色、材质、比例和标签，"
+        "标签区域保持参考图原样，不新增文字、数字、标识或水印。"
+        f"生成竖屏视频关键帧，画面比例 {aspect}，主体位于安全区中央。\n关键帧描述：{description}"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out.write_bytes(edit(product_reference, prompt, _request_size(aspect)))
+        normalize_aspect(out, aspect)
+    except Exception as exc:
+        out.unlink(missing_ok=True)
+        status = exc.code if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+        _append_image_ledger(project.name, frame_id, status)
+        raise
+    _append_image_ledger(project.name, frame_id, "ok")
+    return out.resolve()
+
+
 def build(project, brief_path, product_reference, edit=request_edit):
     project = Path(project)
     brief_path = Path(brief_path)

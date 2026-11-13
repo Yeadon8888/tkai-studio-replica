@@ -267,13 +267,15 @@ def quote_rounds(n, duration=None, price=None, rounds=(1, 2, 3), pass_rate=0.0):
     return out
 
 
-def confirm_tier(pid, candidate_id, tier, note):
+def confirm_tier(pid, candidate_id, tier, note, batch=None):
     """记录人工定档。覆盖会在 research.build 中生效，同时作为 H 档构建许可。"""
     if not note.strip():
         raise SystemExit("人工确认必须写理由 --note")
-    b = batch_dir(pid)
-    if read_batch_dir(pid) != b:
+    b = Path(batch).expanduser().resolve() if batch else batch_dir(pid)
+    if not batch and read_batch_dir(pid) != b:
         raise SystemExit("旧手动对标批次只读，不能写入人工定档")
+    if not b.is_dir():
+        raise SystemExit(f"调研批次不存在：{b}")
     candidates = read_json(b / "candidates.json", [])
     if candidate_id not in [c.get("candidate_id") for c in candidates]:
         raise SystemExit(f"没有这条对标：{candidate_id}")
@@ -346,7 +348,9 @@ def main(argv=None):
     pl.add_argument("--all", action="store_true")
     pl.add_argument("--pass-rate", type=float, default=0.3, help="估算的单轮通过率，默认 0.3（只用于期望值）")
     ct = sub.add_parser("confirm-tier", help="人工确认候选档位")
-    ct.add_argument("--product", required=True)
+    target = ct.add_mutually_exclusive_group(required=True)
+    target.add_argument("--product", help="品；写入该品的手动对标批次")
+    target.add_argument("--batch", help="调研批次目录；直接写入该批次的 tier_overrides.json")
     ct.add_argument("--id", required=True)
     ct.add_argument("--tier", required=True, choices=("H", "M", "L", "X"))
     ct.add_argument("--note", required=True)
@@ -354,7 +358,7 @@ def main(argv=None):
     bu.add_argument("--product", required=True)
     bu.add_argument("--run", required=True)
     a = ap.parse_args(argv)
-    pid = a.product
+    pid = getattr(a, "product", None)
     if a.cmd == "add-file":
         for f in [x.strip() for x in a.files.split(",") if x.strip()]:
             c, new = register(pid, file_candidate(f), a.relation)
@@ -383,7 +387,7 @@ def main(argv=None):
         write_json(products.product_dir(pid) / "plan.json", plan)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
     elif a.cmd == "confirm-tier":
-        row = confirm_tier(pid, a.id, a.tier, a.note)
+        row = confirm_tier(pid, a.id, a.tier, a.note, batch=a.batch)
         print(f"{a.id} 已人工确认为 {row['tier']} 档：{row['note']}")
     elif a.cmd == "build":
         results = build_plan(pid, a.run)

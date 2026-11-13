@@ -3,7 +3,7 @@
 ## 一张图
 
 ```
-定品 ─► 调研 ─► 拆解/定档 ─► 分配条数 ─► 出提示词 ─► 生成 ─► 审判 ─► 看板
+定品 ─► 调研 ─► 拆解/定档 ─► 分配条数 ─► 出提示词/镜头表 ─► 逐段生成 ─► 后期合成 ─► 审判 ─► 人工确认/看板
                                               ▲                   │
                                               └── 修订提示词 ◄─────┘（不达标时）
 ```
@@ -34,6 +34,7 @@
 | 起草（H/M/L） | `draft_prompt.py` | 模型（`MODEL_DRAFT`）判断适配并改写；代码查硬约束 | 简报的 `prompt`、`draft_fit` |
 | 自写（X） | `own_script.py` | 代码自检 | 脚本与简报；`prompt_review.py` 是实验功能，不在主流程 |
 | 生成 | `loop.py gen` | 代码查预算与在途任务 | `takes/<id>.mp4`、`jobs/<id>.json` |
+| 高质量复刻 | `shot_list.py`、`shot_plan.py`、`compose.py` | 模型拆镜；代码选路线与校验时间轴；Hypit 合成 | `shots.json`、多段简报、带口播字幕的成片 |
 | 审判 | `review_panel.py`、`gate.py` | 代码做机器检查；模型（`MODEL_REVIEW`）按清单判；代码合并与裁决 | `reviews/<id>.json`、判定 |
 | 修订 | `refine_loop.py` | 模型（`MODEL_REVISE`）改提示词；代码查硬约束、预算、轮数 | `refine/<id>.jsonl`、下一轮简报 |
 | 看板 | `loop.py assemble`、`board`、`production.py` | 代码：按提示词系列归组、分级、算废片率与成品单价 | `board.html`（每组显示当前成片，过往废片可展开） |

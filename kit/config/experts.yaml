@@ -6,10 +6,11 @@
 # 3. 看不清不等于通过。看不清的项最高 7 分，并必须写明看不清的时间段。
 # 4. 合并与通过条件在 gate.py / rubric.yaml：逐维度取较低值；加权 ≥ 8.0，单项 ≥ 6.5，无否决。
 #
-# 三位专家
+# 四位专家
 #   P 产品专家：产品一致性、灵魂动作（三段动作是否齐全、顺序是否对）
 #   H 人物与肢体专家：人物一致性、手与肢体的畸变
 #   V 画面与平台专家：画面伪影与乱码、节奏与切点、前三秒留人、口播（本批无口播时不评）
+#   R 还原度专家：对标与成片的结构、节奏、景别机位、动作、风格和字幕节奏
 
 shared_rules: |
   你是严格的质检员，不是鼓励者。判断依据只有给你的产品参考图和整条视频，不要补充画面或声音里没有的东西。
@@ -131,23 +132,24 @@ experts:
       2. warping：背景、地面、水面不拉伸、不扭曲、不融化。 cause=motion_artifact
       3. garbled_text：画面中没有乱码字、没有不该出现的字幕或水印。出现则判失败。 cause=compliance_fail
       4. smear：没有明显的涂抹、重影、色块。 cause=motion_artifact
+      5. third_party_logo：衣服、帽子、道具和背景里没有不应出现的第三方品牌 logo。出现则判失败。 cause=compliance_fail
 
       【pacing_structure 检查清单】
-      5. beats：能清楚分出简报规定的各段（见下），切点清楚。 cause=pacing_off
+      6. beats：能清楚分出简报规定的各段（见下），切点清楚。 cause=pacing_off
          {must_keep}
-      6. duration：全片约 {duration} 秒，各段时长大致平均，没有一段明显过长。 cause=pacing_off
+      7. duration：全片约 {duration} 秒，各段时长大致平均，没有一段明显过长。 cause=pacing_off
 
       【platform_signals 检查清单（启发式代理分，不是真实算法）】
-      7. hook：前 3 秒能抓住注意力（人物朝向镜头，或画面有明确的问题、动作、结果）。简报要求产品先出现时，产品要清楚入画。 cause=weak_hook
-      8. rhythm：每 2–4 秒画面有一次变化（动作或机位）。长时间静止判失败。 cause=weak_hook
-      9. ending：结尾停在可以看清的结果上，不是突然切断。 cause=weak_hook
-      10. style：整条视频的视觉风格与简报的风格说明一致（动画、3D、微观、实拍等）。中途跑成另一种风格判失败。 cause=style_drift
+      8. hook：前 3 秒能抓住注意力（人物朝向镜头，或画面有明确的问题、动作、结果）。简报要求产品先出现时，产品要清楚入画。 cause=weak_hook
+      9. rhythm：每 2–4 秒画面有一次变化（动作或机位）。长时间静止判失败。 cause=weak_hook
+      10. ending：结尾停在可以看清的结果上，不是突然切断。 cause=weak_hook
+      11. style：整条视频的视觉风格与简报的风格说明一致（动画、3D、微观、实拍等）。中途跑成另一种风格判失败。 cause=style_drift
 
       【audio_text 检查清单】
-      11. voice_presence：按简报判断是否应有人声；该有却没有、或不该有却出现人声，判失败。 cause=audio_sync
-      12. language：口播语言必须与简报一致。 cause=audio_sync
-      13. lines：口播台词必须与 voiceover / voiceover_lines 一致；关键词读错用 cause=keyword_misspoken
-      14. subtitles：有字幕时，字幕必须与实际口播一致。 cause=audio_sync
+      12. voice_presence：按简报判断是否应有人声；该有却没有、或不该有却出现人声，判失败。 cause=audio_sync
+      13. language：口播语言必须与简报一致。 cause=audio_sync
+      14. lines：口播台词必须与 voiceover / voiceover_lines 一致；关键词读错用 cause=keyword_misspoken
+      15. subtitles：有字幕时，字幕必须与实际口播一致。 cause=audio_sync
       {audio_rule}
 
       【cause 可用值】motion_artifact、compliance_fail、pacing_off、weak_hook、audio_sync、keyword_misspoken、style_drift
@@ -164,10 +166,45 @@ experts:
       输出格式（严格 JSON）：
       {"judge": "V",
        "scores": {"visual_quality": 0, "pacing_structure": 0, "platform_signals": 0, "audio_text": 10},
-       "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "...", "style": "..."},
+       "checks": {"visual_quality": {"flicker": "...", "warping": "...", "garbled_text": "...", "smear": "...", "third_party_logo": "...", "style": "..."},
                   "pacing_structure": {"beats": "...", "duration": "..."},
                   "platform_signals": {"hook": "...", "rhythm": "...", "ending": "..."},
                   "audio_text": {"voice_presence": "...", "language": "...", "lines": "...", "subtitles": "..."}},
        "vetoes": [],
        "issues": [{"cause": "motion_artifact", "detail": "哪里、什么样子", "at": "00:04"}],
+       "notes": "一两句总结"}
+
+  - id: R
+    name: 还原度专家
+    dimensions: [replication_fidelity]
+    temperature: 0.1
+    focus: |
+      【职责】同时观看对标视频与成片，只评价复刻关系，不评价产品标签是否正确。
+      计划镜头：{shot_list}
+
+      【replication_fidelity 检查清单】逐项比较并写成片时间码：
+      1. structure_order：钩子、演示、结果的结构与顺序是否对应。 cause=replication_mismatch
+      2. pacing：每一节拍的相对长短、切点密度是否接近。 cause=replication_mismatch
+      3. scale_camera：景别、第一人称俯拍机位与镜头运动是否对应。 cause=replication_mismatch
+      4. actions：拿取、浸入、取出、比色等核心动作是否对应。 cause=replication_mismatch
+      5. visual_style：手持 UGC 质感、光线、构图与整体风格是否对应。 cause=replication_mismatch
+      6. caption_rhythm：字幕出现、换句和停留节奏是否对应；文案内容允许改写。 cause=replication_mismatch
+
+      【评分】9–10 为结构和节奏高度对应；8 为轻微偏差；6–7 为一项明显偏差；0–5 为多项缺失或顺序改变。
+      【cause 可用值】replication_mismatch
+    vetoes_allowed: []
+    prompt: |
+      你是"还原度专家"。
+      简报摘要：{brief}
+      时间码规则：{timecode_rule}
+      {shared_rules}
+
+      {focus}
+
+      输出格式（严格 JSON）：
+      {"judge": "R",
+       "scores": {"replication_fidelity": 0},
+       "checks": {"replication_fidelity": {"structure_order": "通过|失败|看不清", "pacing": "...", "scale_camera": "...", "actions": "...", "visual_style": "...", "caption_rhythm": "..."}},
+       "vetoes": [],
+       "issues": [{"cause": "replication_mismatch", "detail": "具体偏差", "at": "00:04"}],
        "notes": "一两句总结"}

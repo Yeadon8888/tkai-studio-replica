@@ -61,6 +61,13 @@ def _human_latest(path):
     return latest
 
 
+def _legacy_fidelity(reviews):
+    """R8 前的历史评审没有还原度；离线展示时用中性分兼容，不伪造 R 专家结论。"""
+    if reviews and not any("replication_fidelity" in (row.get("scores") or {}) for row in reviews):
+        return list(reviews) + [{"scores": {"replication_fidelity": gate.NEUTRAL}, "vetoes": [], "issues": []}]
+    return reviews
+
+
 def build_series(briefs):
     """把所有成片按提示词系列归组。当前成片 = 通过的那条；没有通过的，取分级最好、轮次最新的一条。"""
     groups, order = {}, []
@@ -92,6 +99,7 @@ def build(path, rubric=None):
         takes = []
         for t in b.get("takes", []):
             reviews = t.get("reviews") or ([t["review"]] if t.get("review") else [])
+            reviews = _legacy_fidelity(reviews)
             row = {"id": t.get("id"), "attempt": t.get("attempt"), "video": t.get("video"), "note": t.get("note"),
                    "series": t.get("series"), "duration": t.get("duration"), "cost_cny": t.get("cost_cny"),
                    "cost_estimated": t.get("cost_estimated"), "submits": t.get("submits"),
@@ -141,5 +149,7 @@ def build(path, rubric=None):
     agreed = sum(HUMAN_TO_EXPERT[t["human"]["decision"]] == t["decision"] for t in comparable)
     stats.update(human_count=len(judged), human_compared=len(comparable), human_agreed=agreed,
                  human_agreement_rate=(agreed / len(comparable) if comparable else None))
+    shots_path = path.parent / "shots.json"
+    shot_list = json.loads(shots_path.read_text(encoding="utf-8")) if shots_path.exists() else None
     return {"rule": rule, "briefs": briefs, "series": build_series(briefs), "stats": stats,
-            "grade_text": GRADE_TEXT}
+            "grade_text": GRADE_TEXT, "shot_list": shot_list}

@@ -31,6 +31,7 @@ python3 intake.py breakdown --product <品id>
 python3 intake.py tiers     --product <品id>
 python3 intake.py plan      --product <品id> --n 10 --all
 python3 intake.py confirm-tier --product <品id> --id M001 --tier H --note "<人工复核理由>"
+python3 intake.py confirm-tier --batch <调研批次> --id C023 --tier H --note "<人工复核理由>"
 python3 intake.py build     --product <品id> --run <运行目录>
 ```
 
@@ -39,6 +40,7 @@ python3 intake.py build     --product <品id> --run <运行目录>
 - 本地文件：不上传到任何公开地址，只在本机抽帧后交给文本模型；听不到声音，记录里会注明。
 - `plan` 三选一：`--pick M001,M002`（指定对标）、`--tiers H,M`（指定档位）、`--all`（全部）。只出计划和预计金额，不花钱。结果写到 `products/<品>/plan.json`。
 - H 档计划项带 `needs_confirm: true`。`confirm-tier` 把人工档位与理由写入调研批次的 `tier_overrides.json`；也可把误判的 H 改为 M/L/X。
+- 对调研产出的现有批次用 `confirm-tier --batch`；`--batch` 与 `--product` 二选一。
 - `build` 按 `plan.json` 逐条生成 `<运行目录>/benchmarks/<候选id>.json`。每条复刻项调用一次拆解模型；未确认的 H 档直接跳过。已有对标文件默认不重复调用。
 - 新手动对标存到 `products/<品id>/research/manual/`。旧外部 `manual-<品id>` 批次只读兼容，可把路径显式传给看板。
 
@@ -84,6 +86,25 @@ python3 loop.py board --project <运行目录>                   # 默认 <运�
 - `breakdown` 每次最多 `--cap` 条；播放链接过期的候选跳过且不计费。
 - `gen` 提交前先检查预算（`products.can_spend`）。
 - `board` 的调研批次默认 `BOARD_RESEARCH`，可用 `project.json` 的 `research_dir` 覆盖。
+
+## 高质量逐镜头复刻
+
+```bash
+python3 shot_list.py --project <运行目录> --batch <调研批次> --id C023
+python3 shot_plan.py --project <运行目录> --refs <产品图1,产品图2,产品图3> \
+  --selling-points "16 parameters|125 strips|compare after dipping" --id hq-c023 --prepare-keyframes
+python3 loop.py gen --project <运行目录> --brief <运行目录>/briefs/hq-c023.json --cap 6 --interval 20
+python3 compose.py --project <运行目录> --brief <运行目录>/briefs/hq-c023.json \
+  --refs <产品图1,产品图2,产品图3> --review
+python3 loop.py assemble --project <运行目录>
+python3 loop.py board --project <运行目录>
+```
+
+- `shot_list.py` 整条读取画面和声音，`shots.json` 必须从 0 秒连续覆盖到视频结尾。
+- `shot_plan.py` 不让视频模型画任何文字。`--prepare-keyframes` 每个产品主体镜头调用一次图片编辑，已有同名关键帧时拒绝重复提交。
+- `loop.py gen` 仍在每个视频请求前调用 `products.can_spend`；每段独立落盘、独立评审。
+- `compose.py` 的 TTS 只提交一次且失败不重试；优先用 Hypit 做时间线、字幕/画面文字图层、口播与音乐混合并导出，Hypit 执行失败才回退 ffmpeg，并在 `compose/compose.json` 记录原因。
+- 合成后最终评审会新增 `replication_fidelity`，R 专家同时读取对标与成片。最终人工决定仍用 `human.py record`，流程不会自动扩量。
 
 ## 人工判定与校准（`human.py` / `calibrate.py`）
 
