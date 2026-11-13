@@ -25,6 +25,10 @@ class JsonParsing(unittest.TestCase):
 
     def test_failure_returns_none_and_compat_wrapper_uses_common(self):
         self.assertIsNone(common.parse_json("没有 JSON"))
+        # 输出被截断：外层对象不完整时，不能把内层的 scores 子对象当成整份结果
+        truncated = '```json\n{"judge": "V", "scores": {"visual_quality": 3}, "checks": {"visual_quality": {"f'
+        self.assertIsNone(common.parse_json(truncated, require=("scores",)))
+        self.assertEqual(common.parse_json(truncated), {"visual_quality": 3})
         with mock.patch.object(common, "parse_json", return_value={"x": 1}) as parser:
             self.assertEqual(tt_research.parse_json_obj("任意"), {"x": 1})
         parser.assert_called_once_with("任意")

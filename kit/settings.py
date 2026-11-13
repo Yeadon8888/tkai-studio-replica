@@ -53,7 +53,7 @@ DEFAULTS = {
     "TIER_WEIGHTS": "H:4,M:3,L:2,X:1",
     "FISSION_MAX_N": "5",
     "MAX_ATTEMPTS": "3",
-    "REVIEW_MAX_TOKENS": "2000",
+    "REVIEW_MAX_TOKENS": "6000",
     "REVIEW_FRAMES": "8",
     # 本地视频：github_temp = 上传到下面的公开临时仓库，理解/评审后删除；off = 禁止上传，只能抽帧
     "MEDIA_UPLOAD": "github_temp",

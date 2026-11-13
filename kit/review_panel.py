@@ -171,9 +171,9 @@ def run_expert(exp, project_name, take, brief, anchor, refs, video_url=None, fra
     text = loop.gemini(parts, project=project_name, ref=f"{take}:{exp['id']}",
                        max_tokens=settings.get_int("REVIEW_MAX_TOKENS"),
                        temperature=exp.get("temperature", 0.1), role="review")
-    obj = parse_json(text)
-    if not isinstance(obj, dict):
-        return None
+    obj = parse_json(text, require=("scores",))
+    if not isinstance(obj, dict) or not isinstance(obj.get("scores"), dict):
+        raise ValueError("expert output truncated or missing scores")
     try:
         _normalize_checks(obj)
     except ValueError:
@@ -250,6 +250,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH):
                     last_err = e
                     code = getattr(e, "code", None)
                     print(f"{take} {exp['id']} 第 {attempt_no} 次调用失败：{type(e).__name__} {code or ''}")
+                    # 5xx、429、超时断连、输出被截断（ValueError）都算瞬时问题，重试 1 次
                     transient = (isinstance(code, int) and (code >= 500 or code == 429)) or code is None
                     if not transient:
                         break

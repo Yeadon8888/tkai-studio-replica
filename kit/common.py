@@ -27,8 +27,10 @@ def _data_uri(path):
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
 
 
-def parse_json(text):
-    """从模型输出中取出第一个完整 JSON 值；支持代码围栏和前后说明，失败返回 None。"""
+def parse_json(text, require=()):
+    """从模型输出中取出第一个完整 JSON 值；支持代码围栏和前后说明，失败返回 None。
+    require：必须包含的键。给了 require 时，只返回包含这些键的对象——
+    输出被截断时，外层对象解析失败，不能把里面的子对象（例如 scores）误当成整份结果。"""
     if not isinstance(text, str):
         return None
     s = re.sub(r"```(?:json)?\s*", "", text, flags=re.I).replace("```", "")
@@ -36,7 +38,9 @@ def parse_json(text):
     for match in re.finditer(r"[\[{]", s):
         try:
             value, _ = decoder.raw_decode(s[match.start():])
-            return value
         except ValueError:
             continue
+        if require and not (isinstance(value, dict) and all(k in value for k in require)):
+            continue
+        return value
     return None
