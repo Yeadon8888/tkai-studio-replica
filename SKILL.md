@@ -50,7 +50,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 
 ## 高质量逐镜头复刻
 
-产品文字和声音不交给视频模型。`shot_list.py` 读完整对标视频并生成连续镜头表；`shot_plan.py` 把每镜变成 3–6 秒 `segments`，产品主体镜头用真实产品图关键帧，手部动作走质量路线；`compose.py` 用 Hypit 加入口播、字幕、画面文字与音乐。具体命令见 `references/commands.md`。
+产品文字和声音不交给视频模型。`shot_list.py` 按真实切镜输出整体结构、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`；`keyframe.py scene` 建立共用场景；`shot_plan.py` 按连续性合并并在 15 秒边界处分块，生成时用上一块尾帧接力；`compose.py` 用 Hypit 加入口播、字幕、画面文字与音乐。具体命令见 `references/commands.md`，方法与风险见 `references/long-take.md`。
 
 ## 开工前要问创作者的三件事
 
@@ -62,6 +62,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 
 ## 必须遵守
 
+- **脚本文案不由 Agent 手写**：脚本、提示词、口播、字幕由 `script_writer.py` 用配置模型生成并经代码校验；校验不过就停下报告，由人决定。
 - **花钱前先说清楚**：条数、档位分布、预计金额。默认每品预算见 `.env` 的 `PRODUCT_BUDGET_CNY`，超出先沟通并登记理由。
 - **模型只写文字，不做裁决**：通过与否由审判和闸门决定；产品锚点、固定项、预算、上限由代码检查。
 - **专家按清单判**：每一项是通过、失败或看不清；失败必须写时间码和具体描述；看不清不算通过。

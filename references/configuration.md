@@ -14,13 +14,14 @@ python3 kit/doctor.py --online
 **换文本/理解模型（所有环节一起换）**
 ```
 MODEL_TEXT=<新模型名>
+MODEL_SCRIPT=                 # 留空沿用 MODEL_TEXT
 ```
 
 **只换某个环节的模型**（例如审判用更强的模型，其余不变）
 ```
 MODEL_REVIEW=<新模型名>
 ```
-可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。留空就沿用 `MODEL_TEXT`。
+可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_SCRIPT`（逐镜头脚本、口播和字幕）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。留空就沿用 `MODEL_TEXT`。
 
 **按用途选择视频模型**
 ```

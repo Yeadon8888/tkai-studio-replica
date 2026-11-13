@@ -91,8 +91,10 @@ python3 loop.py board --project <运行目录>                   # 默认 <运�
 
 ```bash
 python3 shot_list.py --project <运行目录> --batch <调研批次> --id C023
+python3 script_writer.py --project <运行目录> --facts "16 parameters,125 strips"
+python3 keyframe.py scene --project <运行目录> --product-reference <产品图1>
 python3 shot_plan.py --project <运行目录> --refs <产品图1,产品图2,产品图3> \
-  --selling-points "16 parameters|125 strips|compare after dipping" --id hq-c023 --prepare-keyframes
+  --id hq-c023
 python3 loop.py gen --project <运行目录> --brief <运行目录>/briefs/hq-c023.json --cap 6 --interval 20
 python3 compose.py --project <运行目录> --brief <运行目录>/briefs/hq-c023.json \
   --refs <产品图1,产品图2,产品图3> --review
@@ -100,8 +102,10 @@ python3 loop.py assemble --project <运行目录>
 python3 loop.py board --project <运行目录>
 ```
 
-- `shot_list.py` 整条读取画面和声音，`shots.json` 必须从 0 秒连续覆盖到视频结尾。
-- `shot_plan.py` 不让视频模型画任何文字。`--prepare-keyframes` 每个产品主体镜头调用一次图片编辑，已有同名关键帧时拒绝重复提交。
+- `shot_list.py` 整条读取画面和声音，先给整体叙事结构，再按真实切镜输出，`shots.json` 必须从 0 秒连续覆盖到视频结尾。
+- `script_writer.py` 用 `MODEL_SCRIPT` 生成 `script.json`；产品事实、竞品词、口播速度与画面文字要求由代码阻塞校验，最多重写一次。
+- `keyframe.py scene` 会真实调用一次图片编辑，生成共用定场图；没有付费授权时不要执行。
+- `shot_plan.py` 按 `cut`/`continuous`/`match_cut` 分组，单次 1–15 秒；计划记录统一 seed、接力块和预计金额，不发起视频生成。完整规则见 `long-take.md`。
 - `loop.py gen` 仍在每个视频请求前调用 `products.can_spend`；每段独立落盘、独立评审。
 - `compose.py` 的 TTS 只提交一次且失败不重试；优先用 Hypit 做时间线、字幕/画面文字图层、口播与音乐混合并导出，Hypit 执行失败才回退 ffmpeg，并在 `compose/compose.json` 记录原因。
 - 合成后最终评审会新增 `replication_fidelity`，R 专家同时读取对标与成片。最终人工决定仍用 `human.py record`，流程不会自动扩量。

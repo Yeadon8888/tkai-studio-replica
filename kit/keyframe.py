@@ -195,6 +195,67 @@ def generate_frame(project, frame_id, product_reference, description, aspect_rat
     return out.resolve()
 
 
+def generate_scene(project, product_reference, edit=request_edit):
+    """用真实产品图与 script.json 的共用场景描述生成唯一的定场图。"""
+    project = Path(project)
+    product_reference = Path(product_reference).resolve()
+    if not product_reference.is_file():
+        raise FileNotFoundError(f"产品参考图不存在：{product_reference}")
+    script = _read(project / "script.json")
+    scene = str(script.get("scene") or "").strip()
+    if not scene:
+        raise ValueError("script.json 缺少 scene")
+    out = project / "scene.png"
+    if out.exists():
+        raise FileExistsError("scene.png 已存在，为避免重复付费不再提交")
+    aspect = settings.get("VIDEO_ASPECT")
+    prompt = (
+        "以上传图片中的产品为唯一产品参考，严格保留产品外观与标签原样。"
+        "建立后续所有视频段共用的真实场景，不新增文字、数字、logo、字幕或水印。"
+        f"画面比例 {aspect}。场景描述：{scene}"
+    )
+    try:
+        out.write_bytes(edit(product_reference, prompt, _request_size(aspect)))
+        normalize_aspect(out, aspect)
+    except Exception as exc:
+        out.unlink(missing_ok=True)
+        status = exc.code if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+        _append_image_ledger(project.name, "scene", status)
+        raise
+    _append_image_ledger(project.name, "scene", "ok")
+    return out.resolve()
+
+
+def generate_chain_last_frame(project, segment_id, first_frame, end_state, aspect_ratio=None, edit=request_edit):
+    """以上一块最后一帧为基础编辑出本块终点画面；失败不重试。"""
+    project = Path(project)
+    first_frame = Path(first_frame).resolve()
+    if not first_frame.is_file():
+        raise FileNotFoundError(f"接力首帧不存在：{first_frame}")
+    if not str(end_state or "").strip():
+        raise ValueError("接力段缺少 end_state")
+    aspect = aspect_ratio or settings.get("VIDEO_ASPECT")
+    out = project / "chain" / f"{segment_id}-last.png"
+    if out.exists():
+        return out.resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    prompt = (
+        "把上传的上一段最后一帧作为同一世界、同一产品、同一道具和同一光线的起点。"
+        "只把动作自然推进到指定终点，不新增文字、数字、logo、字幕或水印。"
+        f"终点状态：{end_state}"
+    )
+    try:
+        out.write_bytes(edit(first_frame, prompt, _request_size(aspect)))
+        normalize_aspect(out, aspect)
+    except Exception as exc:
+        out.unlink(missing_ok=True)
+        status = exc.code if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+        _append_image_ledger(project.name, f"{segment_id}:chain-last", status)
+        raise
+    _append_image_ledger(project.name, f"{segment_id}:chain-last", "ok")
+    return out.resolve()
+
+
 def build(project, brief_path, product_reference, edit=request_edit):
     project = Path(project)
     brief_path = Path(brief_path)
@@ -248,6 +309,21 @@ def build(project, brief_path, product_reference, edit=request_edit):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "scene":
+        parser = argparse.ArgumentParser(description="用 script.json 场景和真实产品图生成共用定场图")
+        parser.add_argument("scene")
+        parser.add_argument("--project", required=True)
+        parser.add_argument("--product-reference", required=True, help="真实产品参考图")
+        args = parser.parse_args(argv)
+        try:
+            image = generate_scene(args.project, args.product_reference)
+        except urllib.error.HTTPError as exc:
+            raise SystemExit(f"定场图编辑失败 HTTP {exc.code}，不重试") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as exc:
+            raise SystemExit(f"定场图编辑失败 {type(exc).__name__}，不重试：{str(exc)[:180]}") from None
+        print(f"定场图 → {image}")
+        return 0
     parser = argparse.ArgumentParser(description="用产品参考图生成首帧并写出 -kf 简报")
     parser.add_argument("--project", required=True, help="新运行目录")
     parser.add_argument("--brief", required=True, help="原简报 JSON")

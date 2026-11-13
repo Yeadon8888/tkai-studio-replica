@@ -39,6 +39,27 @@ def timeline(brief):
     return rows
 
 
+def apply_script(brief, script):
+    """合成前以 script.json 为文案唯一来源，避免 Agent 或旧简报手改文案。"""
+    rows = {str(row.get("id")): row for row in (script or {}).get("shots") or []}
+    if not rows:
+        raise ValueError("script.json 没有镜头脚本")
+    result = dict(brief)
+    segments = []
+    for index, segment in enumerate(brief.get("segments") or [], 1):
+        ids = segment.get("shot_ids") or [segment.get("shot_id")]
+        selected = [rows[sid] for sid in ids if sid in rows]
+        if not selected:
+            raise ValueError(f"第 {index} 段在 script.json 找不到对应镜头")
+        updated = dict(segment)
+        updated["voiceover_line"] = " ".join(str(x.get("voiceover") or "").strip() for x in selected).strip()
+        updated["caption"] = " ".join(str(x.get("caption") or "").strip() for x in selected).strip()
+        updated["onscreen_copy"] = " ".join(str(x.get("onscreen_copy") or "").strip() for x in selected).strip()
+        segments.append(updated)
+    result["segments"] = segments
+    return result
+
+
 def srt_text(rows):
     def stamp(value):
         millis = int(round(value * 1000))
@@ -254,6 +275,10 @@ def compose_ffmpeg(source_video, voice, music, rows, output, workdir):
 def build(project, brief_path, refs=None, voice="Kore", review=False):
     project, brief_path = Path(project), Path(brief_path)
     brief = read_json(brief_path)
+    script_path = project / "script.json"
+    if not script_path.is_file():
+        raise FileNotFoundError(f"缺少 script.json；请先运行 script_writer.py：{script_path}")
+    brief = apply_script(brief, read_json(script_path))
     rows = timeline(brief)
     take_id = brief["id"]
     source = project / "takes" / f"{take_id}.mp4"

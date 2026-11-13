@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""镜头表 → 可逐段生成的 ``segments`` 简报。"""
+"""把镜头表与已校验脚本转成按连续性分组的视频生成计划。"""
 import argparse
 import json
 import math
+import secrets
 import sys
 from pathlib import Path
 
@@ -10,155 +11,193 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 from common import read_json, write_json  # noqa: E402
-import keyframe  # noqa: E402
 import settings  # noqa: E402
+import shot_list  # noqa: E402
 
-
-NO_TEXT = "Do not render captions, letters, numbers, logos or watermarks. Keep label areas exactly as in the reference images; do not add text."
+NO_TEXT = "Do not render captions, letters, numbers, logos or watermarks."
 
 
 def _duration(shot):
     return round(float(shot["end"]) - float(shot["start"]), 3)
 
 
-def validate_durations(shots):
-    for shot in shots:
-        duration = _duration(shot)
-        if duration < 3 or duration > 6:
-            raise ValueError(f"{shot.get('id')} 时长 {duration:g} 秒，不在 3–6 秒范围")
+def validate_durations(segments):
+    """TokensFactory H3 单次请求只能是 1–15 秒整数。"""
+    for row in segments:
+        value = row.get("duration") if "duration" in row else _duration(row)
+        if isinstance(value, bool) or float(value) != int(float(value)) or not 1 <= int(float(value)) <= 15:
+            raise ValueError(f"{row.get('id') or row.get('shot_id')} 请求时长 {value} 秒，不在 1–15 秒整数范围")
 
 
-def expand_beats(shots):
-    """连续长镜头按动作节拍拆成 3–6 秒生成段；源 ``shots.json`` 保持不变。"""
-    out = []
+def continuity_groups(shots):
+    groups = []
     for shot in shots:
+        if not groups or shot.get("join") != "continuous":
+            groups.append([shot])
+        else:
+            groups[-1].append(shot)
+    return groups
+
+
+def _atoms(group):
+    atoms = []
+    for shot in group:
         duration = _duration(shot)
-        if duration <= 6:
-            out.append(dict(shot))
-            continue
-        count = max(2, math.ceil(duration / 6))
-        while duration / count > 6:
-            count += 1
-        while duration / count < 3 and count > 2:
-            count -= 1
-        source_step = duration / count
-        target_total = int(round(duration))
-        base, remainder = divmod(target_total, count)
-        generated_durations = [base + (1 if index < remainder else 0) for index in range(count)]
-        cursor = float(shot["start"])
-        phases = (
-            "Establish the overhead view: hold the exact product bottle and a clean test strip above the cup.",
-            "Dip one test strip into the water with a natural hand movement.",
-            "Lift the strip out and hold it steady as the test pads change colour.",
-            "Place the strip beside the bottle colour chart for comparison and hold the result.",
-        )
+        count = max(1, math.ceil(duration / 15))
+        each = duration / count
         for index in range(count):
-            row = dict(shot)
-            row["id"] = f"{shot['id']}-B{index + 1}"
-            row["source_start"] = round(float(shot["start"]) + source_step * index, 3)
-            row["source_end"] = round(float(shot["start"]) + source_step * (index + 1), 3)
-            row["start"] = round(cursor, 3)
-            cursor += generated_durations[index]
-            row["end"] = round(cursor, 3)
-            row["source_shot_id"] = shot["id"]
-            row["keyframe_preferred"] = index in (0, count - 1)
-            row["action"] = phases[index] if count == 4 else f"Phase {index + 1} of {count}: {shot.get('action', '')}"
-            out.append(row)
-    validate_durations(out)
-    return out
+            atoms.append({"shot": shot, "duration": each, "part": index + 1, "parts": count})
+    return atoms
 
 
-def rewrite_lines(shots, selling_points):
-    """按镜头节奏分配我方事实台词；不沿用对标原句。"""
-    points = [str(x).strip() for x in selling_points if str(x).strip()]
-    if not points:
-        raise ValueError("至少提供一条我方卖点")
-    if len(shots) == 4 and len(points) >= 2:
-        return [f"Let's test this water across {points[0]}.",
-                "Dip one strip into the water.",
-                "Lift it out and let the test pads develop.",
-                f"Compare the colors on the bottle chart. This pack includes {points[1]}."]
-    templates = ("Let's see what is really in this water.", "This test covers {point}.",
-                 "Dip the strip, then let the test pads develop.", "Compare the result for {point}.")
-    lines = []
-    for index, shot in enumerate(shots):
-        point = points[index % len(points)]
-        lines.append(templates[index % len(templates)].format(point=point))
-    return lines
+def split_group(group):
+    """优先在镜头边界切分；单镜头超过 15 秒时才在镜头内均分。"""
+    atoms = _atoms(group)
+    chunks, current, total = [], [], 0.0
+    remaining_total = sum(x["duration"] for x in atoms)
+    while atoms:
+        atom = atoms.pop(0)
+        remaining_groups = max(1, math.ceil(remaining_total / 15))
+        target = remaining_total / remaining_groups
+        if current and (total + atom["duration"] > 15 or (total >= target and len(atoms) + 1 >= remaining_groups)):
+            chunks.append(current)
+            remaining_total -= total
+            current, total = [], 0.0
+        current.append(atom)
+        total += atom["duration"]
+    if current:
+        chunks.append(current)
+    return chunks
 
 
-def choose_route(shot, keyframe_path=None):
-    if shot.get("product_role") == "subject" and shot.get("keyframe_preferred", True) and keyframe_path:
-        return "keyframe"
-    return "quality"
+def _script_rows(script_data):
+    return {str(row.get("id")): row for row in script_data.get("shots") or []}
 
 
-def make_plan(shots_data, product_refs, selling_points, brief_id="hq-c023", keyframes=None):
-    shots = expand_beats(shots_data.get("shots") or [])
+def _estimate(route, resolution, duration):
+    price = settings.video_unit_price(settings.video_route_model(route), resolution)
+    return round(price * duration, 4) if price is not None else None
+
+
+def _portion(text, part, parts):
+    """单镜头跨请求时按词均分文案，避免每块重复整段口播。"""
+    words = str(text or "").split()
+    if parts <= 1 or not words:
+        return " ".join(words)
+    start = round(len(words) * (part - 1) / parts)
+    end = round(len(words) * part / parts)
+    return " ".join(words[start:end])
+
+
+def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scene_path=None, seed=None):
+    shots_data = shot_list.validate(shots_data)
+    shots = shots_data.get("shots") or []
+    rows = _script_rows(script_data)
+    missing = [shot.get("id") for shot in shots if shot.get("id") not in rows]
+    if missing:
+        raise ValueError("script.json 缺少镜头：" + ", ".join(missing))
     refs = [str(Path(path).expanduser().resolve()) for path in product_refs]
-    if len(refs) < 2:
-        raise ValueError("生成计划至少需要 2 张真实产品图")
+    if not refs:
+        raise ValueError("生成计划至少需要 1 张真实产品图")
     if any(not Path(path).is_file() for path in refs):
         raise FileNotFoundError("真实产品图有缺失")
-    lines = rewrite_lines(shots, selling_points)
-    frames = keyframes or {}
+    scene = Path(scene_path).expanduser().resolve() if scene_path else None
+    if not scene or not scene.is_file():
+        raise FileNotFoundError("缺少共用定场图 scene.png；先运行 keyframe.py scene")
+    seed = int(seed if seed is not None else secrets.randbelow(2_147_483_646) + 1)
+    if seed < 1:
+        raise ValueError("连续性计划 seed 必须大于等于 1")
+    groups = continuity_groups(shots)
     segments = []
-    for index, (shot, line) in enumerate(zip(shots, lines), 1):
-        frame = frames.get(shot["id"]) or frames.get(shot.get("source_shot_id"))
-        route = choose_route(shot, frame)
-        prompt = (
-            "Vertical 9:16 realistic handheld UGC, first-person overhead view. "
-            f"Shot scale: {shot.get('scale')}. Camera: {shot.get('camera')}. "
-            f"Action: {shot.get('action')}. Match the reference pacing: {shot.get('rhythm')}. "
-            "Use the supplied product photos only for product appearance. " + NO_TEXT
-        )
-        images = refs[:3] if shot.get("hand_action") else refs[:2]
-        segment = {"shot_id": shot["id"], "prompt": prompt, "duration": _duration(shot),
-                   "video_route": route, "resolution": "768p" if route == "keyframe" else "960p", "aspect_ratio": "9:16",
-                   "images": images, "voiceover_line": line, "caption": line,
-                   "onscreen_copy": selling_points[index - 1] if index <= len(selling_points) else ""}
-        if route == "keyframe":
-            segment.update(first_frame=str(frame), last_frame=str(frame))
-        segments.append(segment)
+    for group_index, group in enumerate(groups, 1):
+        chunks = split_group(group)
+        starts_match_cut = group[0].get("join") == "match_cut"
+        for chunk_index, chunk in enumerate(chunks, 1):
+            script_rows = [rows[atom["shot"]["id"]] for atom in chunk]
+            chained = chunk_index > 1 or starts_match_cut
+            route = "keyframe" if chained else "quality"
+            resolution = "768p" if chained else "960p"
+            source_duration = sum(atom["duration"] for atom in chunk)
+            request_duration = max(1, min(15, int(round(source_duration))))
+            timed, cursor = [], 0.0
+            for atom, row in zip(chunk, script_rows):
+                part = f" Part {atom['part']} of {atom['parts']}." if atom["parts"] > 1 else ""
+                timed.append(f"{cursor:.1f}-{cursor + atom['duration']:.1f}s:{part} {row['visual_prompt']}")
+                cursor += atom["duration"]
+            prompt = (f"Shared scene: {script_data['scene']}. " + " ".join(timed) + " " + NO_TEXT).strip()
+            shot_ids = list(dict.fromkeys(atom["shot"]["id"] for atom in chunk))
+            voice = " ".join(_portion(row.get("voiceover"), atom["part"], atom["parts"])
+                             for atom, row in zip(chunk, script_rows)).strip()
+            caption = " ".join(_portion(row.get("caption"), atom["part"], atom["parts"])
+                               for atom, row in zip(chunk, script_rows)).strip()
+            copy = " ".join(str(row.get("onscreen_copy") or "").strip()
+                            for atom, row in zip(chunk, script_rows) if atom["part"] == 1).strip()
+            last_atom, last_row = chunk[-1], script_rows[-1]
+            if last_atom["parts"] > 1 and last_atom["part"] < last_atom["parts"]:
+                end_state = (f"Natural intermediate state after part {last_atom['part']} of "
+                             f"{last_atom['parts']}: {last_row['visual_prompt']}")
+            else:
+                end_state = str(last_row.get("end_state") or last_atom["shot"].get("end_state") or "").strip()
+            segment = {
+                "shot_id": shot_ids[0], "shot_ids": shot_ids, "prompt": prompt,
+                "duration": request_duration, "source_duration": round(source_duration, 3),
+                "video_route": route, "resolution": resolution, "aspect_ratio": "9:16",
+                "seed": seed, "voiceover_line": voice, "caption": caption,
+                "onscreen_copy": copy, "end_state": end_state,
+                "chain_group": f"G{group_index:02d}", "chain_index": chunk_index,
+                "chain_total": len(chunks),
+            }
+            if route == "quality":
+                segment["images"] = [str(scene)] + refs[:8]
+            else:
+                segment.update(first_frame="chain:prev", last_frame="chain:end")
+            segment["estimated_cny"] = _estimate(route, resolution, request_duration)
+            segments.append(segment)
+    validate_durations(segments)
+    estimates = [row["estimated_cny"] for row in segments]
     return {
         "id": brief_id, "title": f"高质量复刻 {shots_data.get('candidate_id') or ''}".strip(),
-        "summary": shots_data.get("summary", ""), "duration": round(sum(s["duration"] for s in segments), 3),
-        "aspect_ratio": "9:16", "resolution": "768p", "segments": segments,
-        "voiceover_lines": lines, "must_keep": [shot.get("action", "") for shot in shots],
+        "summary": shots_data.get("summary", ""), "duration": sum(x["duration"] for x in segments),
+        "source_duration": round(sum(_duration(x) for x in shots), 3),
+        "aspect_ratio": "9:16", "resolution": "960p", "segments": segments,
+        "voiceover_lines": [x["voiceover_line"] for x in segments],
+        "must_keep": [shot.get("action", "") for shot in shots if shot.get("keep") == "keep"],
         "replication_reference": shots_data.get("source_video_url") or shots_data.get("reference_url"),
-        "shot_list": "shots.json", "product_facts": list(selling_points), "takes": [brief_id],
+        "shot_list": "shots.json", "script": "script.json", "scene": str(scene),
+        "seed": seed, "estimated_cny": round(sum(estimates), 4) if all(x is not None for x in estimates) else None,
+        "takes": [brief_id],
     }
 
 
-def build(project, product_refs, selling_points, brief_id="hq-c023", prepare_keyframes=False):
+def build(project, product_refs, brief_id="hq-replica", scene_path=None, seed=None):
     project = Path(project)
     shots = read_json(project / "shots.json")
-    frames = {}
-    if prepare_keyframes:
-        for shot in expand_beats(shots.get("shots") or []):
-            if shot.get("product_role") != "subject" or not shot.get("keyframe_preferred", True):
-                continue
-            frames[shot["id"]] = str(keyframe.generate_frame(
-                project, f"{brief_id}-{shot['id']}", product_refs[0], shot.get("action") or shot.get("camera") or "product close-up",
-                settings.get("VIDEO_ASPECT")))
-    plan = make_plan(shots, product_refs, selling_points, brief_id=brief_id, keyframes=frames)
+    if not shots:
+        raise FileNotFoundError(f"缺少 shots.json：{project / 'shots.json'}")
+    script_path = project / "script.json"
+    script = read_json(script_path)
+    if not script:
+        raise FileNotFoundError(f"缺少 script.json；请先运行 script_writer.py：{script_path}")
+    plan = make_plan(shots, script, product_refs, brief_id=brief_id,
+                     scene_path=scene_path or project / "scene.png", seed=seed)
     destination = project / "briefs" / f"{brief_id}.json"
     write_json(destination, plan)
     return destination, plan
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="把 shots.json 转成逐镜头生成简报")
+    parser = argparse.ArgumentParser(description="按连续性把 shots.json 与 script.json 转成生成计划")
     parser.add_argument("--project", required=True)
     parser.add_argument("--refs", required=True, help="真实产品图，逗号分隔")
-    parser.add_argument("--selling-points", required=True, help="只允许使用的卖点，竖线分隔")
-    parser.add_argument("--id", default="hq-c023")
-    parser.add_argument("--prepare-keyframes", action="store_true", help="为产品主体镜头各调用一次 GPT Image")
+    parser.add_argument("--id", default="hq-replica")
+    parser.add_argument("--scene", help="共用定场图；默认 <运行目录>/scene.png")
+    parser.add_argument("--seed", type=int)
     args = parser.parse_args(argv)
-    path, plan = build(args.project, [x for x in args.refs.split(",") if x.strip()],
-                       [x for x in args.selling_points.split("|") if x.strip()], args.id, args.prepare_keyframes)
+    path, plan = build(args.project, [x.strip() for x in args.refs.split(",") if x.strip()],
+                       args.id, args.scene, args.seed)
     print(f"生成计划 → {path}")
-    print(json.dumps({"segments": len(plan["segments"]), "duration": plan["duration"]}, ensure_ascii=False))
+    print(json.dumps({"segments": len(plan["segments"]), "duration": plan["duration"],
+                      "seed": plan["seed"], "estimated_cny": plan["estimated_cny"]}, ensure_ascii=False))
     return 0
 
 
