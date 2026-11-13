@@ -28,5 +28,8 @@
 - 真实调用上限：`gpt-image-2` ≤ 3 张；视频生成 ≤ 3 条（共 30 秒，约 3.9 元）；文本模型 ≤ 12 次。新运行目录 `projects/<日期>-keyframe-ab/`，用 `products.py register-run` 登记到品 `water-test-strips`。`export STUDIO_HOME=<主仓库数据目录>`。
 - 付费接口报错不换模型、不重试付费任务，如实记录。
 
+- 预算：用户已批准品 `water-test-strips` 上限提到 19.5 元（已花约 10.4 元，R4 另用约 2.6 元）。本任务视频费用不超过 3.9 元，图片不超过 3 张；生成前用 `products.can_spend` 确认，不够就停下说明。
+- 临时视频托管已改为 GitHub Release 附件（`media_host`），网络断流会自动重试；上传仍失败时如实记录，不要改用别的托管方。
+
 ## 交付
 - commit、`git push -u origin feat/keyframe`、`gh pr create --base main`；不合并，不改 `VERSION`、`CHANGELOG.md`

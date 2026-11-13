@@ -26,5 +26,8 @@
 - `python3 -m unittest discover -s kit/tests`
 - 真实调用：`export STUDIO_HOME=<主仓库数据目录>`；视频生成最多 2 段（共 20 秒，约 2.6 元），不重试付费任务；文本模型 ≤ 6 次。简报用 `projects/20261112-fission-H-test/briefs/H-test-C002-F01-r2.json` 的提示词拆成两段（前 10 秒举瓶与蘸水，后 10 秒对照结果），放在新运行目录 `projects/<日期>-segments-test/`，并用 `products.py register-run` 登记到品 `water-test-strips`。
 
+- 预算：用户已批准品 `water-test-strips` 上限提到 19.5 元（已花约 10.4 元）。本任务视频费用不超过 2.6 元；生成前用 `products.can_spend` 确认，不够就停下说明。
+- 临时视频托管已改为 GitHub Release 附件（`media_host`），网络断流会自动重试；上传仍失败时如实记录，不要改用别的托管方。
+
 ## 交付
 - commit、`git push -u origin feat/segments`、`gh pr create --base main`；不合并，不改 `VERSION`、`CHANGELOG.md`

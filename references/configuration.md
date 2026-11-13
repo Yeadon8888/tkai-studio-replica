@@ -38,7 +38,8 @@ PRODUCT_BUDGET_CNY=5          # 每个品的默认预算
 LIMIT_TIKHUB_CALLS=100        # 单次查询的请求上限
 LIMIT_TEXT_CALLS=100          # 单个运行的文本模型请求上限
 MAX_ATTEMPTS=3                # 生成—审判—修订循环的唯一轮数上限
-REVIEW_MAX_TOKENS=2000        # 每位专家评审的输出 token 上限
+REVIEW_MAX_TOKENS=6000        # 每位专家评审的输出 token 上限（推理 token 也计入，太小会截断）
+VIDEO_MIN_TOKENS=150          # 视频至少占多少 token 才算模型真的读到；没读到就作废并改抽帧
 TIER_WEIGHTS=H:4,M:3,L:2,X:1  # 条数分配权重
 FISSION_MAX_N=5               # 单个对标一批最多几条
 ```
@@ -51,6 +52,8 @@ MEDIA_UPLOAD=github_temp      # 无可用 remote_url 时临时上传，评审后
 MEDIA_HOST_REPO=owner/repo    # 用户自己的公开临时媒体仓库
 ```
 设为 `MEDIA_UPLOAD=off` 时，如果任务记录也没有可访问的 `remote_url`，评审回退到抽帧并记录 `mode: frames`。
+
+模型没有读到视频时（按 token 判断，常见原因是链接会跳转或被托管方限流），这一轮作废，自动改抽帧重评，评审记录写 `video_fallback`。新成片优先用生成服务返回的 `remote_url`，它最可靠。
 
 **密钥**
 推荐只在 `.env` 里写密钥文件的路径：
