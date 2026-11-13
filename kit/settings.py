@@ -41,8 +41,10 @@ DEFAULTS = {
     "MODEL_REVIEW": "",
     "MODEL_REVISE": "",
     "MODEL_VIDEO": "minimax-H3",
+    "MODEL_IMAGE": "gpt-image-2",
     # 视频参数与价格
     "VIDEO_PRICE_CNY_PER_SECOND": "0.13",
+    "IMAGE_PRICE_CNY": "",
     "VIDEO_DURATION": "10",
     "VIDEO_RESOLUTION": "768p",
     "VIDEO_ASPECT": "9:16",
@@ -130,9 +132,9 @@ def get_float(name):
 
 
 def model(role="text"):
-    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/video/text。"""
-    if role == "video":
-        return get("MODEL_VIDEO")
+    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/video/image/text。"""
+    if role in ("video", "image"):
+        return get(f"MODEL_{role.upper()}")
     return get(f"MODEL_{role.upper()}") if role in TEXT_ROLES and get(f"MODEL_{role.upper()}") else get("MODEL_TEXT")
 
 
@@ -142,6 +144,12 @@ def text_models():
 
 def video_price():
     return get_float("VIDEO_PRICE_CNY_PER_SECOND")
+
+
+def image_price():
+    """单张图片估价；留空表示价格未知。"""
+    value = get("IMAGE_PRICE_CNY").strip()
+    return float(value) if value else None
 
 
 def tier_weights():
