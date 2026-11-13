@@ -6,6 +6,7 @@
 import os
 
 import yaml
+import settings
 
 KIT = os.path.dirname(os.path.abspath(__file__))
 
@@ -24,7 +25,10 @@ def _derive(rubric):
 
 def load_rubric(path=None):
     with open(path or os.path.join(KIT, "config", "rubric.yaml"), encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        rubric = yaml.safe_load(f)
+    # 兼容只读展示方：配置文件不再保存第二套轮数，运行时值仍来自 settings。
+    rubric["max_attempts"] = settings.get_int("MAX_ATTEMPTS")
+    return rubric
 
 
 _DC, _DF = _derive(load_rubric())
@@ -119,7 +123,7 @@ def evaluate(review, attempt, rubric=None):
     plan.sort(key=lambda p: order.index(p["retry_from"]) if p["retry_from"] in order else 99)
     out.update(stage=failed_stage, failed_stage=failed_stage, repair=plan,
                retry_from=plan[0]["retry_from"] if plan else "plan")
-    if attempt >= R.get("max_attempts", 5):
+    if attempt >= settings.get_int("MAX_ATTEMPTS"):
         out.update(decision="escalate", reason=f"第 {attempt} 次仍不通过，停止自动重做，交给人")
     else:
         out.update(decision="repair", reason="未通过：按 retry_from 重做")

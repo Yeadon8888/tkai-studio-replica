@@ -24,6 +24,7 @@ sys.path.insert(0, str(KIT))
 import products  # noqa: E402
 
 import settings  # noqa: E402
+from common import parse_json  # noqa: E402
 
 COST_PER_SECOND = settings.video_price()  # .env：VIDEO_PRICE_CNY_PER_SECOND
 MAX_PROMPT_CHARS = 1500
@@ -62,6 +63,19 @@ def collect_issues(project, take_id, decision):
     return out
 
 
+def failure_causes(project, take_id, decision):
+    """相邻轮比较用：否决项 + 专家 issues 的 cause（无评审文件时兼容 gate repair）。"""
+    causes = set((decision or {}).get("vetoes") or [])
+    rec_path = Path(project) / "reviews" / f"{take_id}.json"
+    if rec_path.exists():
+        rec = _read(rec_path)
+        for expert in rec.get("experts", []) or []:
+            causes.update(i.get("cause") for i in expert.get("issues", []) or [] if i.get("cause"))
+    else:
+        causes.update(r.get("cause") for r in (decision or {}).get("repair", []) or [] if r.get("cause"))
+    return causes
+
+
 REVISE_TEMPLATE = """你是视频提示词修改员。下面是一条视频生成提示词，以及审判发现的具体问题。
 只修改问题涉及的部分，其他保持原样。输出严格 JSON：{{"prompt": "修改后的完整提示词"}}，不要其他文字。
 
@@ -89,16 +103,6 @@ def build_revise_prompt(prompt, anchor, fixed, issues):
                                   issues="\n".join(lines) or "（无具体问题，只做整体修改）", prompt=prompt)
 
 
-def _parse_prompt(text):
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s.lower().startswith("json"):
-            s = s[4:]
-    js = json.loads(s[s.find("{"): s.rfind("}") + 1])
-    return js["prompt"]
-
-
 def check_revision(new_prompt, anchor):
     """硬约束检查：锚点逐字、长度、非空。返回错误列表。"""
     errs = []
@@ -117,7 +121,10 @@ def revise(prompt, anchor, fixed, issues, llm):
     for _ in range(2):
         text = llm(build_revise_prompt(prompt, anchor, fixed, issues))
         try:
-            new = _parse_prompt(text)
+            obj = parse_json(text)
+            new = obj["prompt"] if isinstance(obj, dict) else None
+            if new is None:
+                raise ValueError
         except (ValueError, KeyError):
             last = ["模型输出不是有效 JSON"]
             continue
@@ -127,14 +134,16 @@ def revise(prompt, anchor, fixed, issues, llm):
     return None, last
 
 
-def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_attempts=3, log_dir=None):
-    """返回 {"status": succeeded|escalated|max_attempts|budget_stop|gen_failed|revise_failed, "attempts": [...]}。
+def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_attempts=None, log_dir=None):
+    """返回 {"status": succeeded|escalated|repeat_defect|max_attempts|budget_stop|gen_failed|revise_failed, "attempts": [...]}。
     gen(project, brief_path) 与 review(project, take_id, refs) 可注入，便于测试；默认在 main() 里接真实函数。"""
     project = Path(project)
     base = base_brief["id"]
     log = (Path(log_dir) if log_dir else project / "refine") / f"{base}.jsonl"
     brief = dict(base_brief)
     attempts = []
+    max_attempts = settings.get_int("MAX_ATTEMPTS") if max_attempts is None else max_attempts
+    previous_causes = set()
     for n in range(1, max_attempts + 1):
         tid = f"{base}-a{n}"
         brief["id"] = tid
@@ -154,15 +163,24 @@ def run(base_brief, project, pid, refs, gen, review, llm, anchor, fixed="", max_
             _log(log, rec)
             return {"status": "gen_failed", "attempts": attempts}
         decision = review(project, tid, refs)
+        causes = failure_causes(project, tid, decision)
         rec = {"attempt": n, "take": tid, "prompt_sha256": hashlib.sha256(brief["prompt"].encode()).hexdigest()[:12],
                "decision": decision.get("decision"), "weighted": decision.get("weighted"),
-               "low": decision.get("low_dimensions"), "vetoes": decision.get("vetoes")}
+               "low": decision.get("low_dimensions"), "vetoes": decision.get("vetoes"),
+               "causes": sorted(causes)}
         attempts.append(rec)
         _log(log, rec)
         if decision.get("decision") == "pass":
             return {"status": "succeeded", "attempts": attempts}
         if decision.get("decision") is None or decision.get("decision") == "escalate":
             return {"status": "escalated", "attempts": attempts}
+        repeated = sorted(previous_causes & causes)
+        if repeated:
+            rec2 = {"attempt": n, "take": tid, "stop": "repeat_defect", "causes": repeated}
+            attempts.append(rec2)
+            _log(log, rec2)
+            return {"status": "repeat_defect", "repeat_causes": repeated, "attempts": attempts}
+        previous_causes = causes
         if n == max_attempts:
             break
         issues = collect_issues(project, tid, decision)
@@ -192,7 +210,7 @@ def main(argv=None):
     ap.add_argument("--product", required=True, help="品 id（用于预算检查）")
     ap.add_argument("--refs", required=True, help="产品参考图，逗号分隔")
     ap.add_argument("--fixed", default="", help="固定项说明（动作、场景、机位、节奏）")
-    ap.add_argument("--attempts", type=int, default=settings.get_int("REFINE_MAX_ATTEMPTS"))
+    ap.add_argument("--attempts", type=int, default=settings.get_int("MAX_ATTEMPTS"))
     a = ap.parse_args(argv)
     import loop
     import review_panel
@@ -201,7 +219,8 @@ def main(argv=None):
     anchor = (project / "product_anchor.txt").read_text(encoding="utf-8").strip() if (project / "product_anchor.txt").exists() else ""
 
     def gen(proj, brief_path):
-        loop.cmd_gen(Namespace(project=str(proj), brief=str(brief_path), cap=3, interval=20, max_polls=60))
+        loop.cmd_gen(Namespace(project=str(proj), brief=str(brief_path), cap=3, interval=20, max_polls=60,
+                               no_review=True, review_skip_reason="由 refine_loop 下一步评审"))
 
     def review(proj, tid, refs):
         return review_panel.review_take(str(proj), tid, refs)

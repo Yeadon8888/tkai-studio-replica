@@ -18,6 +18,7 @@ STUDIO = KIT.parent
 sys.path.insert(0, str(KIT))
 
 import own_script  # noqa: E402
+from common import parse_json  # noqa: E402
 
 CRITERIA_PATH = KIT / "config" / "prompt_critic.yaml"
 LOG_DIR = STUDIO / "methods" / "review_log"
@@ -56,28 +57,24 @@ REVISE_TEMPLATE = """下面是一条视频脚本（JSON）和质检员的意见�
 """
 
 
-def _parse(text):
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s.lower().startswith("json"):
-            s = s[4:]
-    start, end = s.find("{"), s.rfind("}")
-    return json.loads(s[start:end + 1])
-
-
 def review(script, anchor, llm, criteria=None):
     crit = criteria or load_criteria()
     text = "\n".join(f"- [{c['severity']}] {c['id']}：{c['rule']}" for c in crit)
     prompt = CRITIQUE_TEMPLATE.format(anchor=anchor, criteria=text,
                                       script=json.dumps(script, ensure_ascii=False, indent=2))
-    return _parse(llm(prompt))
+    value = parse_json(llm(prompt))
+    if not isinstance(value, dict):
+        raise ValueError("模型输出不是有效 JSON 对象")
+    return value
 
 
 def revise(script, issues, llm):
     prompt = REVISE_TEMPLATE.format(issues=json.dumps(issues, ensure_ascii=False, indent=2),
                                     script=json.dumps(script, ensure_ascii=False, indent=2))
-    return _parse(llm(prompt))
+    value = parse_json(llm(prompt))
+    if not isinstance(value, dict):
+        raise ValueError("模型输出不是有效 JSON 对象")
+    return value
 
 
 def run(script, anchor, llm, rounds=3, criteria=None, log_path=None):

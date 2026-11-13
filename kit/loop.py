@@ -3,8 +3,8 @@
 
 子命令（每一步都可单独运行，都记账）：
   breakdown  --batch <调研批次> --ids C003[,C..]           Gemini 七维拆解（公开播放链接）→ breakdown.json
-  gen        --project <项目目录> --brief <brief.json>       提交视频生成并轮询，保存 mp4 到 takes/，任务号落盘到 jobs/
-  review     --project <项目目录> --take <T01> --refs a.jpg,b.jpg   Gemini 双评委评分（抽帧 + 参考图）→ reviews/
+  gen        --project <项目目录> --brief <brief.json>       生成并保存远程地址，落盘后默认自动评审
+  review     --project <项目目录> --take <T01> --refs a.jpg,b.jpg   三专家整条视频评审 → reviews/
   assemble   --project <项目目录>                            汇总 reviews/ 与 briefs 为 takes.json（闸门判定在 production.py）
   board      --project <项目目录> [--research <批次>] --out <html>
 
@@ -64,6 +64,24 @@ BREAKDOWN_PROMPT = """你在拆解一条 TikTok 对标视频，用于判断它�
  "has_person": true 或 false,
  "risk": "AI 复刻风险一句话"}"""
 
+class VideoNotIngested(RuntimeError):
+    """请求里带了视频，但模型实际没有读到（prompt token 只有文字和图片的量）。
+    2026-11-13 实测：Release 附件链接（有跳转）会被网关静默丢弃，模型照样编出结论。"""
+
+
+def video_ingested(parts, usage):
+    """按用量判断视频是否被读到：去掉文字 token 和每张图约 1100 token 后，至少还要有 VIDEO_MIN_TOKENS。
+    用量里没有明细时返回 None（无法判断）。"""
+    if not any(p.get("type") == "video_url" for p in parts):
+        return True
+    details = (usage or {}).get("prompt_tokens_details") or {}
+    if "text_tokens" not in details or "prompt_tokens" not in (usage or {}):
+        return None
+    n_img = sum(1 for p in parts if p.get("type") == "image_url")
+    rest = usage["prompt_tokens"] - details["text_tokens"] - 1100 * n_img
+    return rest >= settings.get_int("VIDEO_MIN_TOKENS")
+
+
 def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
     """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
     model = settings.model(role)
@@ -84,7 +102,12 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
         ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
         raise
     text = js["choices"][0]["message"]["content"] or ""
-    ledger.append(settings.get("TEXT_PROVIDER"), model, "ok", project=project, ref=ref, units=1, usage=js.get("usage") or {}, kind="text")
+    usage = js.get("usage") or {}
+    seen = video_ingested(parts, usage)
+    status = "ok" if seen is not False else "video_not_ingested"
+    ledger.append(settings.get("TEXT_PROVIDER"), model, status, project=project, ref=ref, units=1, usage=usage, kind="text")
+    if seen is False:
+        raise VideoNotIngested("模型没有读到视频（按 token 判断），结果作废；检查视频地址是否需要跳转或已失效")
     return text
 
 
@@ -235,11 +258,21 @@ def cmd_gen(a):
             req = urllib.request.Request(url, headers={"User-Agent": "TokensFactory-Media/1.1"})
             with urllib.request.urlopen(req, timeout=300) as r, out.open("wb") as f:
                 f.write(r.read())
-            job.update(status="saved", video=str(out), saved_at=_now())
+            job.update(status="saved", video=str(out), saved_at=_now(),
+                       remote_url=url, remote_url_at=_now())
             _write(job_path, job)
             # 终态记账：金额已在 submitted 行计过，这里 units=0，避免重复计费
             ledger.append("tokensfactory", GEN_MODEL, "saved", project=project.name, ref=tid, units=0)
             print(f"{tid} 已保存 → {out}")
+            if getattr(a, "no_review", False):
+                job.update(review_skipped=True,
+                           review_skip_reason=getattr(a, "review_skip_reason", "命令行指定 --no-review"))
+                _write(job_path, job)
+            else:
+                import review_panel  # 延迟导入，避免循环导入
+                review_panel.review_take(project, tid, brief.get("images") or [])
+                job.update(review_skipped=False, reviewed_at=_now())
+                _write(job_path, job)
             return
         if status in ("failed", "error", "cancelled"):
             job["error"] = str(js)[:300]
@@ -384,7 +417,7 @@ def cmd_select(a):
 
 
 def cmd_produce(a):
-    """对 selection.json 中的每条：要求已有简报 → 生成 → 评审 → 汇总 → 看板。每一步都有上限，失败不重提。"""
+    """对 selection.json 中的每条：要求已有简报 → 生成（自动评审）→ 汇总。"""
     project = Path(a.project)
     sel = _read(project / "selection.json")["selected"]
     if not sel:
@@ -394,11 +427,9 @@ def cmd_produce(a):
         if not brief.exists():
             print(f"{cid} 缺少简报 briefs/{cid}.json，跳过")
             continue
-        ns = argparse.Namespace(project=str(project), brief=str(brief), cap=a.cap, interval=a.interval, max_polls=a.max_polls)
+        ns = argparse.Namespace(project=str(project), brief=str(brief), cap=a.cap, interval=a.interval,
+                                max_polls=a.max_polls, no_review=False)
         cmd_gen(ns)
-        if (project / "takes" / f"{cid}.mp4").exists():
-            refs = ",".join(str(x) for x in json.loads(brief.read_text(encoding="utf-8")).get("images", []))
-            cmd_review(argparse.Namespace(project=str(project), take=cid, refs=refs, judges=2))
     cmd_assemble(argparse.Namespace(project=str(project)))
 
 
@@ -415,6 +446,7 @@ def main(argv=None):
     g.add_argument("--cap", type=int, default=3)
     g.add_argument("--interval", type=int, default=20)
     g.add_argument("--max-polls", type=int, default=60)
+    g.add_argument("--no-review", action="store_true", help="保存成片后跳过评审，并把原因写入任务记录")
     r = sub.add_parser("review")
     r.add_argument("--project", required=True)
     r.add_argument("--take", required=True)

@@ -52,9 +52,11 @@ DEFAULTS = {
     "PRODUCT_BUDGET_CNY": "5",
     "TIER_WEIGHTS": "H:4,M:3,L:2,X:1",
     "FISSION_MAX_N": "5",
-    "REFINE_MAX_ATTEMPTS": "3",
+    "MAX_ATTEMPTS": "3",
+    "REVIEW_MAX_TOKENS": "6000",
+    "VIDEO_MIN_TOKENS": "150",     # 带视频的请求里，视频至少占多少 token 才算真的读到；低于它判为没读到
     "REVIEW_FRAMES": "8",
-    # 本地视频：github_temp = 上传到下面的公开临时仓库，拆解后删除；off = 禁止上传，只能抽帧
+    # 本地视频：github_temp = 上传到下面的公开临时仓库，理解/评审后删除；off = 禁止上传，只能抽帧
     "MEDIA_UPLOAD": "github_temp",
     "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
@@ -89,6 +91,9 @@ def load(force=False):
         return _cache
     file_vals = parse_env_file(env_path())
     cfg = dict(DEFAULTS)
+    # 旧配置名只作读取兼容；代码统一读取 MAX_ATTEMPTS。
+    if "MAX_ATTEMPTS" not in file_vals and file_vals.get("REFINE_MAX_ATTEMPTS"):
+        cfg["MAX_ATTEMPTS"] = file_vals["REFINE_MAX_ATTEMPTS"]
     for k, v in file_vals.items():
         if k in SECRET_KEYS:
             os.environ.setdefault(k, v)
@@ -97,6 +102,8 @@ def load(force=False):
     for k in list(cfg):
         if os.environ.get(k):
             cfg[k] = os.environ[k]
+    if not os.environ.get("MAX_ATTEMPTS") and os.environ.get("REFINE_MAX_ATTEMPTS"):
+        cfg["MAX_ATTEMPTS"] = os.environ["REFINE_MAX_ATTEMPTS"]
     for f in [x.strip() for x in cfg["CREDENTIALS_FILES"].split(",") if x.strip()]:
         vals = parse_env_file(f)
         for k in SECRET_KEYS:

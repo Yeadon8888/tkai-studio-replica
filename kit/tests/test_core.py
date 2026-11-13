@@ -404,7 +404,8 @@ class Decoupling(unittest.TestCase):
         p_prod = rp._expert_prompt(cfg["experts"][0], brief, "锚点", "")
         self.assertIn("先展示脏水", p_prod)
         p_vis = rp._expert_prompt(cfg["experts"][2], brief, "锚点", "")
-        self.assertIn("需人工听", p_vis)
+        self.assertIn("必须真正听完整条视频", p_vis)
+        self.assertIn("语言是否与简报一致", p_vis)
         self.assertIn("20 秒", p_vis)
 
     def test_no_personal_paths_or_model_names_hardcoded_outside_settings(self):
