@@ -7,7 +7,7 @@
 用户要的是高质量的爆款复刻。数据：28 条成片 0 条通过，失败一半以上是"产品细节错误"和"乱码字"——视频模型画不好产品标签和文字。原则：**视频模型只负责画面与动作；产品、文字、声音不交给它**。
 
 ## 对标与产品（已确定，用户已批准试样预算）
-- 对标：调研批次 `<主仓库上一级>/research/tiktok-benchmark/20261113-US-drinking-water-strips` 的 **C023**（`https://www.tiktok.com/@mrs.fallout/video/7682136023844818189`，54.5 万播放，18 秒，第一人称俯拍，手拿 16 项参数试纸蘸水后对照色卡；验证 A，可复制 2）。档位 H，**需用户确认**：在运行 `build` 前，若 `tier_overrides.json` 里没有 C023=H 的人工确认，就停下说明。
+- 对标：调研批次 `<主仓库上一级>/research/tiktok-benchmark/20261113-US-drinking-water-strips` 的 **C023**（`https://www.tiktok.com/@mrs.fallout/video/7682136023844818189`，54.5 万播放，18 秒，第一人称俯拍，手拿 16 项参数试纸蘸水后对照色卡；验证 A，可复制 2）。档位 H，**用户已于 2026-11-13 确认 C023 = H**（原话："确认 C023"）。现在的 `intake.py confirm-tier` 只支持手动对标批次（`manual-<品>`），请给它加 `--batch <调研批次目录>` 参数，然后用它把这条确认写进该调研批次的 `tier_overrides.json`（理由写"用户确认 C023 为 TESPERT 试样 H 档对标"），并补测试。
 - 产品：品 `tespert-16in1`，真实产品图在 `<主仓库>/projects/20261112-tespert-16in1/refs/`（`1.jpg`、`2.jpg`、`3.jpg`、`product_1_box_bottle.jpg`、`product_3_features.jpg`）。卖点只用产品图上写的：16 项参数、125 条、浸入后比色。
 
 ## 要做
@@ -23,7 +23,7 @@
 6. **人工确认**：成片生成后，看板显示镜头表与每段，等用户用 `kit/human.py` 判定；不自动扩量。
 
 ## 允许 / 禁止
-允许：`kit/shot_list.py`、`kit/shot_plan.py`、`kit/compose.py`（新建）、`kit/keyframe.py`、`kit/loop.py`、`kit/review_panel.py`、`kit/production.py`、`kit/dashboard.py`、`kit/config/experts.yaml`、`kit/config/rubric.yaml`、`kit/tests/**`、`references/**`、`SKILL.md`。
+允许：`kit/intake.py`（只为 confirm-tier 的 --batch）、`kit/shot_list.py`、`kit/shot_plan.py`、`kit/compose.py`（新建）、`kit/keyframe.py`、`kit/loop.py`、`kit/review_panel.py`、`kit/production.py`、`kit/dashboard.py`、`kit/config/experts.yaml`、`kit/config/rubric.yaml`、`kit/tests/**`、`references/**`、`SKILL.md`。
 禁止：`VERSION`、`CHANGELOG.md`、`.env`、已有数据目录（只读）、AutoDL 或其它非 TokensFactory 视频服务。
 
 ## 验收
