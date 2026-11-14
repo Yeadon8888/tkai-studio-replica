@@ -9,6 +9,42 @@
 python3 kit/doctor.py --online
 ```
 
+## 模型清单
+
+`kit/config/models.yaml` 是模型 ID、能力、价格、策略和验证依据的唯一来源。`policy` 有三种：
+
+- `allowed`：可以由代码自动选择；
+- `ask_first`：只有人明确同意并传入 `allow_ask_first: true` 才能选择；
+- `retired`：不再提交新请求。
+
+不确定的能力在目录里是 `null`，不会按模型名字推测。自动选择还会排除最近体检失败的模型，并在没有
+候选时逐个列出白名单、健康状态或能力不满足的原因。
+
+`.env` 可以限制自动选择范围：
+
+```text
+MODELS_ALLOWED=minimax-H3,minimax-H3-fast,minimax-H3-cinema,minimax-H3-first-last
+```
+
+留空表示目录中全部 `allowed` 模型。现有 `MODEL_*` 和 `VIDEO_ROUTE_*` 显式指定仍优先；指定模型不满足
+请求时会报错，不会偷偷换模型。视频简报使用 `video_route: auto` 才进入按需求选模。
+
+免费核对供应方清单：
+
+```bash
+python3 kit/doctor.py --online
+```
+
+真实能力体检（包含少量文本、视频理解和 TTS 付费调用）：
+
+```bash
+python3 kit/doctor.py --online --probe text,video_read,tts
+```
+
+体检明细写入 `STUDIO_HOME/ledger/probes.jsonl`，当前健康状态写入
+`STUDIO_HOME/.cache/model_health.json`；文本与 TTS 调用同时记入成本账本。视频/图片生成模型只检查
+`/v1/models` 是否列出，不执行生成。视频理解探针临时上传本地 2 秒测试片，结束后立即从媒体临时仓库删除。
+
 ## 常见操作
 
 **换文本/理解模型（所有环节一起换）**
@@ -35,7 +71,7 @@ VIDEO_DURATION=10
 VIDEO_RESOLUTION=768p
 VIDEO_ASPECT=9:16
 ```
-简报写 `video_route`：`default | quality | fast | keyframe | replace_person | motion`；不写时用 `default`。
+简报写 `video_route`：`default | quality | fast | keyframe | replace_person | motion | auto`；不写时用 `default`。
 能力、字段和限制见 [视频模型与用途路线](video-models.md)。`MODEL_VIDEO` 与
 `VIDEO_PRICE_CNY_PER_SECOND` 只供旧 `.env` 兼容。
 
