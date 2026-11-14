@@ -63,6 +63,63 @@ class ConsoleTests(unittest.TestCase):
         code, headers, body = self.request("/media/p1/runs/20261114-console/takes/T1.mp4")
         self.assertEqual((code, body), (200, b"012345")); self.assertEqual(headers["Accept-Ranges"], "bytes")
 
+    def test_status_materializes_current_checkpoint_without_paid_call(self):
+        products.create("p2", "第二个测试品", budget_cny=5, anchor="anchor")
+        products.new_run("p2", "console", date="20261114")
+        ledger_path = self.home / "ledger" / "costs.jsonl"
+        self.assertFalse(ledger_path.exists())
+        status, _, body = self.request("/api/status")
+        self.assertEqual(status, 200)
+        p2 = next(row for row in json.loads(body) if row["product"] == "p2")
+        self.assertEqual(p2["blocking_checkpoint"]["kind"], "benchmark")
+        pending = json.loads(self.request("/api/pending")[2])
+        self.assertEqual(len([row for row in pending if row["product"] == "p2"]), 1)
+        self.request("/api/status")
+        pending = json.loads(self.request("/api/pending")[2])
+        self.assertEqual(len([row for row in pending if row["product"] == "p2"]), 1)
+        self.assertFalse(ledger_path.exists())
+
+    def test_uncited_low_is_human_readable_and_maps_legacy_sequence(self):
+        text = console._uncited_low_text([
+            {"judge": 1, "dim": "product_consistency", "score": 5},
+            {"judge": 1, "dim": "soul_fidelity", "score": 5},
+        ])
+        self.assertEqual(text, ["产品专家：产品一致性 5 分、灵魂还原 5 分——未写原因"])
+
+    def test_reference_fallback_order(self):
+        run = self.run
+        local = run / "benchmarks" / "C023.mp4"; local.parent.mkdir(); local.write_bytes(b"video")
+        brief = {"replication_reference": "https://cdn.test/ref.mp4"}
+        shots = {"candidate_id": "C023", "aweme_id": "123", "reference_url": "https://tiktok.test/original"}
+        with mock.patch.object(console, "_remote_video", return_value=True):
+            detail = console._reference_detail(run, brief, shots)
+        self.assertEqual(detail["reference_source"], "local")
+        local.unlink()
+        with mock.patch.object(console, "_remote_video", return_value=True):
+            detail = console._reference_detail(run, brief, shots)
+        self.assertEqual((detail["reference_source"], detail["reference_video"]),
+                         ("remote", "https://cdn.test/ref.mp4"))
+        covers = run / "covers"; covers.mkdir(); (covers / "123.jpg").write_bytes(b"jpg")
+        with mock.patch.object(console, "_remote_video", return_value=False):
+            detail = console._reference_detail(run, brief, shots)
+        self.assertEqual(detail["reference_source"], "cover")
+        self.assertTrue(detail["reference_cover"].endswith("/covers/123.jpg"))
+        self.assertTrue(detail["reference_expired"])
+        self.assertEqual(detail["reference_original"], "https://tiktok.test/original")
+
+    def test_reference_finds_legacy_research_batch_by_candidate(self):
+        batch = self.home / "research" / "legacy-batch"
+        (batch / "covers").mkdir(parents=True)
+        (batch / "candidates.json").write_text(json.dumps([
+            {"candidate_id": "C023", "aweme_id": "123"}
+        ]), encoding="utf-8")
+        (batch / "covers" / "123.jpg").write_bytes(b"jpg")
+        shots = {"candidate_id": "C023", "aweme_id": "123"}
+        with mock.patch.object(console, "_remote_video", return_value=False):
+            detail = console._reference_detail(self.run, {}, shots)
+        self.assertEqual(detail["reference_source"], "cover")
+        self.assertIn("/research-media/legacy-batch/covers/123.jpg", detail["reference_cover"])
+
     def test_resolve_rules_are_passed_through(self):
         code, _, body = self.request(f"/api/checkpoint/{self.cp['id']}/resolve",
                                      {"status": "rejected", "note": "", "by": "测试",
