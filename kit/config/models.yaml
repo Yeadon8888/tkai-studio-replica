@@ -12,6 +12,7 @@ x-text-unknown: &text_unknown
   reads_video: null
   reads_audio: null
   json_reliable: null
+  min_output_tokens: null
   prices: null
   policy: ask_first
   verified: {date: '2026-11-14', basis: 仅确认账户模型列表中存在}
@@ -70,8 +71,18 @@ models:
     id: gemini-4-carbon-low
   - <<: *text_unknown
     id: gemini-4-hydrogen
+    reads_video: true
+    reads_audio: true
+    json_reliable: true
+    min_output_tokens: 2000
+    policy: allowed
+    verified: {date: '2026-11-14', basis: 严格 JSON、固定视频画面问题及真实 C023 歌曲识别实测通过}
+    notes: 推理模型；小输出上限会只返回推理或被 length 截断。真实 C023 能识别无口播、音乐类型和具体歌曲。
   - <<: *text_unknown
     id: gemini-4-hydrogen-low
+    min_output_tokens: 2000
+    verified: {date: '2026-11-14', basis: 两次实测均返回 503}
+    notes: 两次 503，能力状态未知，不自动选择。
   - <<: *text_unknown
     id: deepseek-v4.1-flash
   - <<: *text_unknown

@@ -7,6 +7,7 @@ import os
 
 import yaml
 import settings
+import essence
 
 KIT = os.path.dirname(os.path.abspath(__file__))
 
@@ -81,7 +82,7 @@ def merge_judges(reviews):
     return {"scores": dims, "vetoes": vetoes, "issues": issues, "judges": len(reviews), "uncited_low": uncited}
 
 
-def evaluate(review, attempt, rubric=None):
+def evaluate(review, attempt, rubric=None, essence_result=None):
     """判定一次生成。返回 decision: pass | repair | escalate，repair 时带 stage 与 retry_from。"""
     R = rubric or load_rubric()
     dims = R["dimensions"]
@@ -96,6 +97,24 @@ def evaluate(review, attempt, rubric=None):
     low = sorted(k for k in dims if scores[k] < floor)
     vetoes = [v for v in review.get("vetoes", []) or [] if v in R["vetoes"]]
     out.update(weighted=round(weighted, 2), low_dimensions=low, vetoes=vetoes)
+    if essence_result and essence_result.get("tier") != "X":
+        tier = essence_result.get("tier")
+        thresholds = R["pass"].get("essence_min") or {}
+        if tier not in thresholds:
+            raise ValueError("神韵闸门缺少已确认的 H/M/L 档位")
+        score, threshold = float(essence_result.get("essence_score", 0)), float(thresholds[tier])
+        out.update(essence_score=round(score, 4), essence_min=threshold,
+                   essence_unclear=list(essence_result.get("unclear") or []))
+        if score < threshold:
+            retry = essence.retry_from(essence_result)
+            out.update(stage="delivery", failed_stage="essence", retry_from=retry,
+                       repair=[{"cause": "essence_below_threshold", "retry_from": retry,
+                                "fix": "按神韵逐项失败记录修复"}])
+            if attempt >= settings.get_int("MAX_ATTEMPTS"):
+                out.update(decision="escalate", reason=f"神韵还原度 {score:.1%} 低于 {tier} 档 {threshold:.0%}，达到重试上限")
+            else:
+                out.update(decision="repair", reason=f"神韵还原度 {score:.1%} 低于 {tier} 档 {threshold:.0%}")
+            return out
     if review.get("uncited_low"):
         out["uncited_low"] = review["uncited_low"]
         labels = []

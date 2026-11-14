@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import re
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
@@ -74,6 +75,14 @@ def srt_text(rows):
 def _probe_duration(path):
     return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                           "-of", "default=nw=1:nk=1", str(path)], text=True).strip())
+
+
+def mean_volume(path):
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-v", "info", "-i", str(path),
+                             "-af", "volumedetect", "-f", "null", "-"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    match = re.search(r"mean_volume:\s*(-?(?:inf|[0-9.]+)) dB", result.stderr or "", re.I)
+    return float(match.group(1)) if match and match.group(1).lower() != "-inf" else None
 
 
 def _tts_helper():
@@ -272,6 +281,52 @@ def compose_ffmpeg(source_video, voice, music, rows, output, workdir):
     return {"engine": "ffmpeg", "reason": "Hypit 不可用或执行失败"}
 
 
+def compose_native(source_video, music, rows, output, workdir):
+    """保留 H3 原声、统一响度、叠字幕；音乐仅作低音量音床。"""
+    loudness = mean_volume(source_video)
+    if loudness is None or loudness <= -50:
+        raise ValueError("native 单元没有可用音轨或平均响度不高于 -50 dB")
+    srt = Path(workdir) / "captions.srt"
+    srt.write_text(srt_text(rows), encoding="utf-8")
+    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music),
+                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[n];"
+                    "[1:a]volume=0.12[m];[n][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
+                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
+                    "-movflags", "+faststart", "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
+    return {"engine": "ffmpeg-native", "native_mean_volume_db": loudness, "music_gain": 0.12}
+
+
+def compose_mixed(source_video, voice, music, rows, segments, output, workdir):
+    """按单元在 H3 原声和 TTS 之间切换，最后统一响度并压低音乐。"""
+    if mean_volume(source_video) is None:
+        raise ValueError("混合路线中的 native 单元没有音轨")
+    srt = Path(workdir) / "captions.srt"
+    srt.write_text(srt_text(rows), encoding="utf-8")
+    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    pieces, labels, tts_cursor = [], [], 0.0
+    for index, (row, segment) in enumerate(zip(rows, segments)):
+        start, end = float(row["start"]), float(row["end"])
+        duration, delay = end - start, int(round(start * 1000))
+        label = f"unit{index}"
+        if segment.get("audio_route", "tts") == "native":
+            pieces.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS,adelay={delay}|{delay}[{label}]")
+        else:
+            pieces.append(f"[1:a]atrim=start={tts_cursor:.3f}:end={tts_cursor + duration:.3f},asetpts=PTS-STARTPTS,adelay={delay}|{delay}[{label}]")
+            tts_cursor += duration
+        labels.append(f"[{label}]")
+    filters = [f"[0:v]subtitles='{escaped}'[v]", *pieces,
+               f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest,loudnorm=I=-16:TP=-1.5:LRA=11[dialogue]",
+               "[2:a]volume=0.12[music]",
+               "[dialogue][music]amix=inputs=2:duration=first:dropout_transition=2[a]"]
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music),
+                    "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]",
+                    "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
+                    "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
+    return {"engine": "ffmpeg-mixed", "audio_routes": [x.get("audio_route", "tts") for x in segments],
+            "music_gain": 0.12}
+
+
 def build(project, brief_path, refs=None, voice="Kore", review=False):
     project, brief_path = Path(project), Path(brief_path)
     brief = read_json(brief_path)
@@ -289,15 +344,27 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
     raw = project / "takes" / f"{take_id}.raw.mp4"
     if not raw.exists():
         shutil.copy2(source, raw)
-    speech_raw = synthesize_speech(project, " ".join(row["caption"] for row in rows), work / "voiceover.raw.wav", voice)
-    speech = fit_audio(speech_raw, work / "voiceover.wav", rows[-1]["end"])
     music = make_music(work / "music.wav", rows[-1]["end"])
     output = project / "takes" / f"{take_id}.composed.mp4"
-    try:
-        info = compose_hypit(project, raw, speech, music, rows, output)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
-        info = compose_ffmpeg(raw, speech, music, rows, output, work)
-        info["hypit_error"] = type(exc).__name__
+    routes = {str(x.get("audio_route") or "tts") for x in brief.get("segments") or []}
+    segments = brief.get("segments") or []
+    if routes == {"native"}:
+        info = compose_native(raw, music, rows, output, work)
+    else:
+        speech_raw = synthesize_speech(project, " ".join(
+            row["caption"] for row, segment in zip(rows, brief.get("segments") or [])
+            if segment.get("audio_route", "tts") == "tts"), work / "voiceover.raw.wav", voice)
+        tts_duration = sum(row["end"] - row["start"] for row, segment in zip(rows, segments)
+                           if segment.get("audio_route", "tts") == "tts")
+        speech = fit_audio(speech_raw, work / "voiceover.wav", tts_duration)
+        if "native" in routes:
+            info = compose_mixed(raw, speech, music, rows, segments, output, work)
+        else:
+            try:
+                info = compose_hypit(project, raw, speech, music, rows, output)
+            except (FileNotFoundError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+                info = compose_ffmpeg(raw, speech, music, rows, output, work)
+                info["hypit_error"] = type(exc).__name__
     output.replace(source)
     info.update(output=str(source), composed_at=_now(), subtitles=rows)
     write_json(work / "compose.json", info)

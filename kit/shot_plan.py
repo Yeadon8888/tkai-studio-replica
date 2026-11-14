@@ -4,6 +4,8 @@ import argparse
 import json
 import math
 import secrets
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -89,7 +91,45 @@ def _portion(text, part, parts):
     return " ".join(words[start:end])
 
 
-def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scene_path=None, seed=None):
+def audio_route(audio_mode, override=None):
+    override = (override or settings.get("AUDIO_ROUTE_DEFAULT")).strip().lower()
+    if override not in ("auto", "native", "tts"):
+        raise ValueError("AUDIO_ROUTE_DEFAULT 只能是 auto、native 或 tts")
+    if override != "auto":
+        return override
+    return "tts" if audio_mode in ("voiceover", "special_voice") else "native"
+
+
+def _mean_volume(path):
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-v", "info", "-i", str(path),
+                             "-af", "volumedetect", "-f", "null", "-"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    match = re.search(r"mean_volume:\s*(-?[0-9.]+) dB", result.stderr or "")
+    return float(match.group(1)) if match else None
+
+
+def first_last_audio_evidence():
+    """只用已有 first-last 任务作证；没有证据或静音都禁止 native。"""
+    model = settings.video_route_model("keyframe")
+    roots = settings.studio_home() / "products"
+    checked = []
+    for job_path in roots.glob("*/runs/*/jobs/*.json") if roots.exists() else ():
+        job = read_json(job_path, {}) or {}
+        if job.get("model") != model:
+            continue
+        video = Path(job.get("video") or job_path.parents[1] / "takes" / f"{job_path.stem}.mp4")
+        if not video.is_file():
+            continue
+        loudness = _mean_volume(video)
+        checked.append({"job": str(job_path), "video": str(video), "mean_volume_db": loudness})
+        if loudness is not None and loudness > -50:
+            return {"usable": True, "reason": f"已有 {model} 成片平均响度 {loudness:g} dB", "checked": checked}
+    reason = f"没有可证明原声可用的 {model} 历史成片" if not checked else f"已有 {model} 成片无音轨或平均响度不高于 -50 dB"
+    return {"usable": False, "reason": reason, "checked": checked}
+
+
+def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scene_path=None, seed=None,
+              first_last_audio=None):
     shots_data = shot_list.validate(shots_data)
     shots = shots_data.get("shots") or []
     rows = _script_rows(script_data)
@@ -108,6 +148,8 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
     if seed < 1:
         raise ValueError("连续性计划 seed 必须大于等于 1")
     groups = continuity_groups(shots)
+    selected_audio = audio_route(shots_data["audio_mode"])
+    first_last_audio = first_last_audio or {"usable": False, "reason": "未提供 first-last 原声音轨证据"}
     segments = []
     for group_index, group in enumerate(groups, 1):
         chunks = split_group(group)
@@ -147,6 +189,10 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
                 "chain_group": f"G{group_index:02d}", "chain_index": chunk_index,
                 "chain_total": len(chunks),
             }
+            segment["audio_route"] = selected_audio
+            if route == "keyframe" and selected_audio == "native" and not first_last_audio.get("usable"):
+                segment["audio_route"] = "tts"
+                segment["audio_route_reason"] = first_last_audio.get("reason") or "first-last 原声不可用"
             if route == "quality":
                 segment["images"] = [str(scene)] + refs[:8]
             else:
@@ -158,6 +204,7 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
     return {
         "id": brief_id, "title": f"高质量复刻 {shots_data.get('candidate_id') or ''}".strip(),
         "summary": shots_data.get("summary", ""), "duration": sum(x["duration"] for x in segments),
+        "audio_mode": shots_data["audio_mode"],
         "source_duration": round(sum(_duration(x) for x in shots), 3),
         "aspect_ratio": "9:16", "resolution": "960p", "segments": segments,
         "voiceover_lines": [x["voiceover_line"] for x in segments],
@@ -179,7 +226,8 @@ def build(project, product_refs, brief_id="hq-replica", scene_path=None, seed=No
     if not script:
         raise FileNotFoundError(f"缺少 script.json；请先运行 script_writer.py：{script_path}")
     plan = make_plan(shots, script, product_refs, brief_id=brief_id,
-                     scene_path=scene_path or project / "scene.png", seed=seed)
+                     scene_path=scene_path or project / "scene.png", seed=seed,
+                     first_last_audio=first_last_audio_evidence())
     destination = project / "briefs" / f"{brief_id}.json"
     write_json(destination, plan)
     return destination, plan

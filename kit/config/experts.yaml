@@ -182,8 +182,10 @@ experts:
     focus: |
       【职责】同时观看对标视频与成片，只评价复刻关系，不评价产品标签是否正确。
       计划镜头：{shot_list}
+      神韵清单：{essence_list}
 
-      【replication_fidelity 检查清单】逐项比较并写成片时间码：
+      【神韵逐项判定】必须对神韵清单中的每个 id 逐项输出 pass、fail 或 unclear，带成片时间码与具体说明。unclear 不算通过，不得漏项。
+      【replication_fidelity 展示分检查清单】逐项比较并写成片时间码：
       1. structure_order：钩子、演示、结果的结构与顺序是否对应。 cause=replication_mismatch
       2. pacing：每一节拍的相对长短、切点密度是否接近。 cause=replication_mismatch
       3. scale_camera：景别、第一人称俯拍机位与镜头运动是否对应。 cause=replication_mismatch
@@ -206,6 +208,7 @@ experts:
       {"judge": "R",
        "scores": {"replication_fidelity": 0},
        "checks": {"replication_fidelity": {"structure_order": "通过|失败|看不清", "pacing": "...", "scale_camera": "...", "actions": "...", "visual_style": "...", "caption_rhythm": "..."}},
+       "essence": [{"id":"expert-hook","status":"pass|fail|unclear","at":"00:01","detail":"具体依据"}],
        "vetoes": [],
        "issues": [{"cause": "replication_mismatch", "detail": "具体偏差", "at": "00:04"}],
        "notes": "一两句总结"}

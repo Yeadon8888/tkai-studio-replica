@@ -19,10 +19,10 @@ PROMPT = """你是短视频导演。完整观看并听完给出的对标视频�
 不要为了控制时长拆镜；只有画面实际切镜才新建镜头。起止时间必须首尾相接、覆盖整条视频，不得有空隙或重叠。
 只依据画面和声音，看不清或听不清就写空字符串，不要编造。
 只输出一个 JSON 对象：
-{"duration": 18.2, "summary": "为什么整条视频抓人", "structure": [
+{"duration": 18.2, "summary": "为什么整条视频抓人", "audio_mode":"on_camera_speech|voiceover|special_voice|music_only|ambient", "structure": [
  {"beat":"钩子|证明|行动或其他叙事节拍","start":0.0,"end":4.2}], "shots": [
  {"id":"S01","start":0.0,"end":4.2,"scale":"景别","camera":"机位与运动",
-  "action":"动作","product_role":"subject|supporting|none","hand_action":true,
+  "action":"动作","product_role":"subject|supporting|none","hand_action":true,"speaker_on_screen":true,
   "onscreen_text":"原画面文字","voiceover":"口播原文","music_sfx":"音乐与音效",
   "rhythm":"节奏点","hook_reason":"为什么抓人","join":"cut|continuous|match_cut",
   "keep":"keep|redo","redo_reason":"redo 时说明不适配原因，否则空字符串",
@@ -35,6 +35,7 @@ REQUIRED = ("id", "start", "end", "scale", "camera", "action", "onscreen_text",
             "redo_reason", "end_state")
 JOINS = ("cut", "continuous", "match_cut")
 KEEP = ("keep", "redo")
+AUDIO_MODES = ("on_camera_speech", "voiceover", "special_voice", "music_only", "ambient")
 
 
 def research_batch(project, shots=None, explicit=None):
@@ -145,6 +146,11 @@ def validate(data, tolerance=0.08):
         raise ValueError("duration 必须是正数") from exc
     if duration <= 0:
         raise ValueError("duration 必须是正数")
+    audio_mode = data.get("audio_mode")
+    if audio_mode is None:  # 旧运行只读兼容；新模型提示词始终要求该字段。
+        audio_mode = "voiceover" if any(str(x.get("voiceover") or "").strip() for x in data["shots"]) else "ambient"
+    if audio_mode not in AUDIO_MODES:
+        raise ValueError(f"audio_mode 非法：{audio_mode}")
     structure = _validate_timeline(data.get("structure"), duration, "structure", "beat")
     shots, cursor = [], 0.0
     for index, raw in enumerate(data["shots"], 1):
@@ -175,12 +181,14 @@ def validate(data, tolerance=0.08):
             raise ValueError(f"第 {index} 个镜头 end_state 不能为空")
         row["product_role"] = row.get("product_role") if row.get("product_role") in ("subject", "supporting", "none") else "none"
         row["hand_action"] = bool(row.get("hand_action"))
+        row["speaker_on_screen"] = bool(row.get("speaker_on_screen"))
         shots.append(row)
         cursor = end
     if abs(cursor - duration) > tolerance:
         raise ValueError(f"镜头表结尾 {cursor:g} 与视频时长 {duration:g} 不一致")
     shots[-1]["end"] = round(duration, 3)
-    return {**data, "duration": round(duration, 3), "structure": structure, "shots": shots}
+    return {**data, "duration": round(duration, 3), "audio_mode": audio_mode,
+            "structure": structure, "shots": shots}
 
 
 def candidate_source(batch, candidate_id, reachable=tt.media_reachable):

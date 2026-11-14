@@ -89,27 +89,36 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
     """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
     model = settings.model(role)
     cap = settings.get_int("LIMIT_TEXT_CALLS")
-    used = ledger.count_text_calls(project)
-    if used >= cap:
-        raise SystemExit(f"文本模型调用已达上限 {cap}（运行 {project}），停止。")
+    minimum = int(models.get(model).get("min_output_tokens") or 0)
+    requested = max(int(max_tokens), minimum)
     base, key = tt.load_tf_env()
-    body = {"model": model, "messages": [{"role": "user", "content": parts}],
-            "max_tokens": max_tokens, "temperature": temperature}
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "User-Agent": settings.get("HTTP_USER_AGENT")}
-    try:
-        js = common.http_json("POST", base + "/v1/chat/completions", headers, body, timeout=240)
-    except urllib.error.HTTPError as e:
-        ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
-        raise
-    text = js["choices"][0]["message"]["content"] or ""
-    usage = js.get("usage") or {}
-    seen = video_ingested(parts, usage)
-    status = "ok" if seen is not False else "video_not_ingested"
-    ledger.append(settings.get("TEXT_PROVIDER"), model, status, project=project, ref=ref, units=1, usage=usage, kind="text")
-    if seen is False:
-        raise VideoNotIngested("模型没有读到视频（按 token 判断），结果作废；检查视频地址是否需要跳转或已失效")
-    return text
+    for attempt in range(2):
+        if ledger.count_text_calls(project) >= cap:
+            raise SystemExit(f"文本模型调用已达上限 {cap}（运行 {project}），停止。")
+        limit = requested * (2 if attempt else 1)
+        body = {"model": model, "messages": [{"role": "user", "content": parts}],
+                "max_tokens": limit, "temperature": temperature}
+        try:
+            js = common.http_json("POST", base + "/v1/chat/completions", headers, body, timeout=240)
+        except urllib.error.HTTPError as e:
+            ledger.append(settings.get("TEXT_PROVIDER"), model, e.code, project=project, ref=ref, units=1, kind="text")
+            raise
+        choice = js["choices"][0]
+        message = choice.get("message") or {}
+        text = message.get("content") or ""
+        usage = js.get("usage") or {}
+        seen = video_ingested(parts, usage)
+        truncated = choice.get("finish_reason") == "length" or (not text.strip() and bool(message.get("reasoning_content")))
+        status = "truncated" if truncated else ("ok" if seen is not False else "video_not_ingested")
+        ledger.append(settings.get("TEXT_PROVIDER"), model, status, project=project, ref=ref,
+                      units=1, usage=usage, kind="text")
+        if seen is False:
+            raise VideoNotIngested("模型没有读到视频（按 token 判断），结果作废；检查视频地址是否需要跳转或已失效")
+        if not truncated:
+            return text
+    raise ValueError(f"模型 {model} 放大输出上限重试后仍被截断")
 
 
 # ---------------------------------------------------------------- 1. 拆解（调研）

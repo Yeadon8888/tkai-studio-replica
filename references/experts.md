@@ -28,6 +28,8 @@
 
 - 默认把产品参考图和整条视频地址交给四位专家，每位专家完整观看并按视频实际时间写时间码。R 专家额外读取简报里的 `replication_reference` 对标视频。
 - 优先复用任务记录的 `remote_url`；不可用时临时上传到 `media_host`，评审结束立即删除并记日志。
+- R 专家按 `essence.json` 的专家项逐项输出 `pass | fail | unclear`、成片时间码和说明；机器项与专家项合并后按通过数/总项数计算 `essence_score`，`unclear` 不算通过。
+- H/M/L 档神韵阈值分别为 80%/60%/40%。失败类别属于节拍、钩子、台词时退回 `script`；属于动作、机位、画面时退回 `generate`。旧 `replication_fidelity` 分继续展示，不再决定神韵闸门。
 - 只有 `MEDIA_UPLOAD=off` 且没有可用远程地址时才回退为 8 张抽帧，记录写 `mode: frames`；正常整条视频记录写 `mode: video`。
 - 简报有 `voiceover` 或 `voiceover_lines` 时，V 专家检查人声、语言、台词以及字幕与口播的一致性。
 
