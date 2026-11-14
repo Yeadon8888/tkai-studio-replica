@@ -82,6 +82,63 @@ class CheckpointRules(StudioCase):
 
 
 class EngineRules(StudioCase):
+    def test_benchmark_selection_reads_shots_and_tier_override(self):
+        batch = products.product_dir("p1") / "research" / "batch-1"
+        batch.mkdir(parents=True)
+        (batch / "tier_overrides.json").write_text(json.dumps({
+            "C023": {"tier": "H", "note": "人工确认可逐镜复刻"}
+        }), encoding="utf-8")
+        products.select_benchmarks("p1", ["C023"], "batch-1")
+        (self.run / "shots.json").write_text(json.dumps({
+            "candidate_id": "C023", "reference_url": "https://example.test/reference.mp4"
+        }), encoding="utf-8")
+        selected = engine._benchmark_selection(products.load("p1"), self.run)
+        self.assertEqual(selected[0]["tier"], "H")
+        self.assertEqual(selected[0]["tier_reason"], "人工确认可逐镜复刻")
+
+    def test_adopt_tespert_shape_reaches_parent_verdict(self):
+        """旧运行含父成片和四段成片时，迁移后只判父成片。"""
+        shots = {"candidate_id": "C023", "reference_url": "https://example.test/reference.mp4",
+                 "shots": []}
+        (self.run / "shots.json").write_text(json.dumps(shots), encoding="utf-8")
+        briefs = self.run / "briefs"; briefs.mkdir()
+        takes = self.run / "takes"; takes.mkdir()
+        reviews = self.run / "reviews"; reviews.mkdir()
+        parent = {"id": "hq-c023", "segments": [{"id": f"hq-c023-s{i}"} for i in range(1, 5)]}
+        (briefs / "hq-c023.json").write_text(json.dumps(parent), encoding="utf-8")
+        (takes / "hq-c023.mp4").write_bytes(b"parent")
+        (reviews / "hq-c023.decision.json").write_text(json.dumps({"decision": "pass"}), encoding="utf-8")
+        for number in range(1, 5):
+            take = f"hq-c023-s{number}"
+            (briefs / f"{take}.json").write_text(json.dumps({"id": take, "segment_of": "hq-c023"}), encoding="utf-8")
+            (takes / f"{take}.mp4").write_bytes(b"segment")
+            (reviews / f"{take}.decision.json").write_text(json.dumps({"decision": "pass"}), encoding="utf-8")
+
+        before = engine.status("p1", self.run.name)
+        self.assertEqual(before["action"]["type"], "human")
+        self.assertIn("adopt", before["action"]["command"])
+        result = engine.adopt("p1", self.run.name)
+        self.assertEqual({row["kind"] for row in result["adopted"]}, {"benchmark", "script", "budget"})
+        after = engine.status("p1", self.run.name)
+        self.assertEqual(after["stage"], "verdict")
+        self.assertEqual(after["action"]["subject"]["take"], "hq-c023")
+        log = (products.product_dir("p1") / "checkpoints" / "log.jsonl").read_text()
+        self.assertIn('"decided_by": "migration"', log)
+
+    def test_review_requires_registered_product_references(self):
+        products.select_benchmarks("p1", ["C1"])
+        (products.product_dir("p1") / "plan.json").write_text("{}", encoding="utf-8")
+        (self.run / "shots.json").write_text(json.dumps({"candidate_id": "C1"}), encoding="utf-8")
+        briefs = self.run / "briefs"; briefs.mkdir()
+        (briefs / "T1.json").write_text(json.dumps({"estimated_cny": 1}), encoding="utf-8")
+        takes = self.run / "takes"; takes.mkdir(); (takes / "T1.mp4").write_bytes(b"video")
+        # 直接补迁移批准，模拟已有运行；没有参考图时必须停在人处理动作。
+        engine.adopt("p1", self.run.name)
+        result = engine.status("p1", self.run.name)
+        self.assertEqual(result["stage"], "review")
+        self.assertEqual(result["action"]["type"], "human")
+        self.assertIn("register-references", result["action"]["command"])
+
     def test_missing_selection_creates_checkpoint_and_returns_three(self):
         code, result = engine.advance("p1")
         self.assertEqual(code, 3)

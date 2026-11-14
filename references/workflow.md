@@ -10,6 +10,8 @@ python3 kit/studio.py next --product <品>
 
 Agent 只能执行这条命令给出的一个动作。需要人确认时停止；不得绕过确认节点直接调用模型或付费命令。`--dry-run` 只显示动作和预计金额，不创建节点、不执行命令。
 
+`studio next` 以退出码 3 停在确认节点时，Agent 应告诉用户运行 `python3 kit/studio.py console` 打开确认台；命令行 `approve/reject/changes` 仍保留作无浏览器环境的备用入口。
+
 ## 阶段如何推导
 
 引擎不读取人工设置的阶段来决定下一步，而是依次检查实际数据：产品卡 → 已选对标与档位 → `plan.json` → `shots.json` → `script.json` → 带预计金额的生成简报 → 成片 → 评审结论 → 人工判定 → 发布记录。
@@ -41,3 +43,13 @@ Agent 只能执行这条命令给出的一个动作。需要人确认时停止�
 2. 预计金额不超过该品当前剩余预算。
 
 金额未知时不能自动批准。自动批准只批准预算节点，不代表可以越过脚本、人工判定或发布节点。
+
+## 接管旧运行
+
+引擎上线前已经产生 `shots.json`、简报、成片或评审的运行，不会自动假定历史步骤已经获批。`studio status` 会提示显式执行：
+
+```bash
+python3 kit/studio.py adopt --product <品> --run <运行>
+```
+
+`adopt` 只依据已经存在的下游产物补建上游 `benchmark`、`script`、`budget` 批准节点，决定人固定为 `migration`，依据文件写入审计日志。它不会生成内容、调用模型或替人判定成片。

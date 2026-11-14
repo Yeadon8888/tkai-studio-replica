@@ -54,11 +54,19 @@ def parser():
     edit.add_argument("id"); edit.add_argument("--segment", type=int, required=True)
     edit.add_argument("--field", required=True, choices=("voiceover", "caption", "onscreen_copy", "visual_prompt"))
     edit.add_argument("--value", required=True); edit.add_argument("--note", default="人工编辑脚本"); edit.add_argument("--by", default="未署名")
+    adopt = command("adopt")
+    adopt.add_argument("--product", required=True); adopt.add_argument("--run")
+    console = command("console")
+    console.add_argument("--port", type=int, default=8765)
     return ap
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == "console":
+        import console
+        console.serve(args.port)
+        return 0
     if args.command == "next":
         code, result = engine.advance(args.product, args.run, args.dry_run)
     elif args.command == "status":
@@ -70,6 +78,8 @@ def main(argv=None):
         code = 0
     elif args.command == "pending":
         result, code = checkpoints.pending(), 0
+    elif args.command == "adopt":
+        result, code = engine.adopt(args.product, args.run), 0
     elif args.command in ("approve", "reject", "changes"):
         status = {"approve": "approved", "reject": "rejected", "changes": "changes_requested"}[args.command]
         result, code = checkpoints.resolve(args.id, status, args.note, args.by), 0

@@ -53,6 +53,129 @@ def _queue_manual(product):
     return None
 
 
+def _benchmark_selection(meta, run_dir):
+    """合并产品卡选择、运行镜头表和调研批次人工档位。"""
+    selected = [dict(row) if isinstance(row, dict) else {"id": str(row)}
+                for row in (meta.get("selected_benchmarks") or [])]
+    shots = read_json(run_dir / "shots.json", {}) if run_dir else {}
+    candidate_id = (shots or {}).get("candidate_id")
+    if candidate_id and candidate_id not in {row.get("id") for row in selected}:
+        selected.append({
+            "id": candidate_id,
+            "batch": (shots or {}).get("research_batch"),
+            "reference_url": (shots or {}).get("reference_url") or (shots or {}).get("source_video_url"),
+            "source": "shots.json",
+        })
+    for row in selected:
+        batch_value = row.get("batch") or ((shots or {}).get("research_batch")
+                                            if row.get("id") == candidate_id else None)
+        if not batch_value:
+            continue
+        raw = Path(batch_value)
+        candidates = [raw] if raw.is_absolute() else [
+            settings.studio_home() / raw,
+            settings.studio_home() / "research" / raw,
+            products.product_dir(meta["product_id"]) / "research" / raw,
+        ]
+        batch = next((path for path in candidates if path.is_dir()), candidates[0])
+        override = (read_json(batch / "tier_overrides.json", {}) or {}).get(row.get("id"))
+        if override:
+            row["tier"] = override.get("tier")
+            row["tier_reason"] = override.get("note") or override.get("reason") or ""
+            row["tier_source"] = "tier_overrides.json"
+    return selected
+
+
+def _registered_references(meta):
+    refs = []
+    for value in meta.get("reference_images") or []:
+        path = Path(value).expanduser()
+        refs.append(str(path if path.is_absolute() else settings.studio_home() / path))
+    return refs
+
+
+def _run_checkpoints(product, run):
+    root = products.product_dir(product) / "checkpoints"
+    rows = []
+    for path in root.glob("cp-*.json") if root.exists() else ():
+        row = read_json(path, {}) or {}
+        if row.get("run") == run:
+            rows.append(row)
+    return rows
+
+
+def _has_legacy_outputs(run_dir):
+    if not run_dir:
+        return False
+    if (run_dir / "shots.json").is_file() or (run_dir / "script.json").is_file():
+        return True
+    return any(any((run_dir / name).iterdir()) for name in ("briefs", "takes", "reviews")
+               if (run_dir / name).is_dir())
+
+
+def _final_takes(run_dir):
+    """父成片是独立判定对象；分段和 raw 文件只是父成片的附属。"""
+    if not run_dir or not (run_dir / "takes").exists():
+        return []
+    segment_ids = set()
+    for path in _briefs(run_dir):
+        brief = read_json(path, {}) or {}
+        if brief.get("segment_of"):
+            segment_ids.add(path.stem)
+        for segment in brief.get("segments") or []:
+            if isinstance(segment, dict) and segment.get("id"):
+                segment_ids.add(str(segment["id"]))
+    takes = []
+    for path in sorted((run_dir / "takes").glob("*.mp4")):
+        if path.stem.endswith(".raw") or path.stem in segment_ids:
+            continue
+        takes.append(path.stem)
+    return takes
+
+
+def _verdict_subject(run_dir, take):
+    decision_path = run_dir / "reviews" / f"{take}.decision.json"
+    decision = read_json(decision_path, {}) or {}
+    return decision, {"take": take, "decision": decision.get("decision"),
+                      "review": str(decision_path.relative_to(settings.studio_home()))}
+
+
+def adopt(product, run=None):
+    """显式接管引擎上线前的运行，只补建已有下游产物所证明的上游批准节点。"""
+    meta = products.load(product)
+    run_id, run_dir = _latest_run(meta, run)
+    if not run_id or not run_dir or not run_dir.exists():
+        raise ValueError(f"运行不存在：{run_id or '<空>'}")
+    evidence = []
+    selected = _benchmark_selection(meta, run_dir)
+    if (run_dir / "shots.json").exists() or _briefs(run_dir) or _final_takes(run_dir):
+        evidence.append(("benchmark", "确认迁移运行已有对标与档位", {"selected": selected},
+                         [run_dir / "shots.json"]))
+    briefs = _briefs(run_dir)
+    if (run_dir / "script.json").exists():
+        script_subject = {"script": str((run_dir / "script.json").relative_to(settings.studio_home()))}
+        script_files = [run_dir / "script.json"]
+    else:
+        script_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in briefs]}
+        script_files = briefs
+    if script_files and (_final_takes(run_dir) or (run_dir / "reviews").exists()):
+        evidence.append(("script", "确认迁移运行已有脚本或生成简报", script_subject, script_files))
+    if briefs and (_final_takes(run_dir) or (run_dir / "reviews").exists()):
+        budget_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in briefs],
+                          "estimated_cny": _estimate(briefs)}
+        evidence.append(("budget", "确认迁移运行已有生成预算", budget_subject, briefs))
+    adopted = []
+    for kind, summary, subject, paths in evidence:
+        row = checkpoints.create(product, run_id, kind, summary, subject, ["迁移批准"])
+        if row["status"] == "pending":
+            names = [str(path.relative_to(settings.studio_home())) for path in paths if path.exists()]
+            row = checkpoints.resolve(row["id"], "approved",
+                                      "依据已有下游产物补建：" + "、".join(names), "migration")
+        adopted.append(row)
+    return {"product": product, "run": run_id, "adopted": adopted,
+            "message": f"已补建 {len(adopted)} 个迁移批准节点"}
+
+
 def status(product, run=None):
     """返回完全由当前数据推导的阶段与下一动作。"""
     pdir = products.product_dir(product)
@@ -67,17 +190,22 @@ def status(product, run=None):
     run_id, run_dir = _latest_run(meta, run)
     base["run"] = run_id
     plan_path = pdir / "plan.json"
-    selected = meta.get("selected_benchmarks") or []
+    selected = _benchmark_selection(meta, run_dir)
+    if _has_legacy_outputs(run_dir) and not _run_checkpoints(product, run_id):
+        result = {**base, "stage": "benchmark", "stage_label": STAGE_LABELS["benchmark"],
+                  "action": {"type": "human", "command": f"python3 kit/studio.py adopt --product {product} --run {run_id}",
+                             "summary": "这是引擎上线前的运行；请显式 adopt，按已有下游产物补建可追溯批准节点"}}
+        return _with_manual(result)
     # subject 只包含选择本身；生成 plan.json 后仍应命中同一个批准节点。
     benchmark_subject = {"selected": selected}
     benchmark_cp = _checkpoint(product, run_id, "benchmark", benchmark_subject)
-    if (not selected and not plan_path.exists()) or not benchmark_cp or benchmark_cp["status"] != "approved":
+    if not benchmark_cp or benchmark_cp["status"] != "approved":
         action = {"type": "checkpoint", "kind": "benchmark", "summary": "确认对标视频、复刻档位和制作范围",
                   "subject": benchmark_subject, "options": ["确认当前选择", "调整对标", "调整档位"]}
         result = {**base, "stage": "benchmark", "stage_label": STAGE_LABELS["benchmark"], "action": action,
                   "blocking_checkpoint": benchmark_cp}
         return _with_manual(result)
-    if not plan_path.exists():
+    if not plan_path.exists() and not (run_dir and (run_dir / "shots.json").exists()):
         result = {**base, "stage": "plan", "stage_label": STAGE_LABELS["plan"],
                   "action": {"type": "local", "command": [sys.executable, str(KIT / "intake.py"), "plan", "--product", product, "--n", "1", "--all"],
                              "summary": "本地计算一条制作计划", "estimated_cny": 0.0}}
@@ -116,7 +244,12 @@ def status(product, run=None):
         return _with_manual(result)
     briefs = early_briefs
     if not briefs:
-        refs = sorted(str(p) for p in pdir.rglob("*") if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))
+        refs = _registered_references(meta)
+        if not refs:
+            result = {**base, "stage": "plan", "stage_label": STAGE_LABELS["plan"],
+                      "action": {"type": "human", "command": f"python3 kit/products.py register-references --product {product} --files <产品图...>",
+                                 "summary": "产品卡没有登记参考图；请先登记真实产品图，流程不会扫描目录猜测"}}
+            return _with_manual(result)
         result = {**base, "stage": "plan", "stage_label": STAGE_LABELS["plan"],
                   "action": {"type": "local", "command": [sys.executable, str(KIT / "shot_plan.py"), "--project", str(run_dir), "--refs", ",".join(refs) or "<产品参考图>"],
                              "summary": "本地生成连续性计划", "estimated_cny": 0.0}}
@@ -137,34 +270,49 @@ def status(product, run=None):
                   "action": {"type": "paid", "command": [sys.executable, str(KIT / "loop.py"), "gen", "--project", str(run_dir), "--brief", str(brief), "--cap", "1"],
                              "summary": "生成一个视频步骤后停止", "estimated_cny": amount, "approval": budget_cp["id"]}}
         return _with_manual(result)
-    decisions = sorted((run_dir / "reviews").glob("*.decision.json")) if (run_dir / "reviews").exists() else []
-    if not decisions:
-        take = takes[0].stem
+    final_takes = _final_takes(run_dir)
+    if not final_takes:
+        final_takes = [takes[0].stem]
+    for take in final_takes:
+        decision_path = run_dir / "reviews" / f"{take}.decision.json"
+        if decision_path.exists():
+            continue
+        refs = _registered_references(meta)
+        if not refs:
+            result = {**base, "stage": "review", "stage_label": STAGE_LABELS["review"],
+                      "action": {"type": "human", "command": f"python3 kit/products.py register-references --product {product} --files <产品图...>",
+                                 "summary": "产品卡没有登记参考图；评审前必须登记，不能传空 --refs"}}
+            return _with_manual(result)
         result = {**base, "stage": "review", "stage_label": STAGE_LABELS["review"],
-                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "loop.py"), "review", "--project", str(run_dir), "--take", take, "--refs", ""],
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "loop.py"), "review", "--project", str(run_dir), "--take", take, "--refs", ",".join(refs)],
                              "summary": "评审一条成片后停止", "estimated_cny": None, "approval": budget_cp["id"]}}
         return _with_manual(result)
-    decision = read_json(decisions[-1], {}) or {}
-    take = decisions[-1].name.replace(".decision.json", "")
-    verdict_subject = {"take": take, "decision": decision.get("decision"), "review": str(decisions[-1].relative_to(settings.studio_home()))}
-    verdict_cp = _checkpoint(product, run_id, "verdict", verdict_subject)
-    if decision.get("decision") in ("pass", "escalate") and (not verdict_cp or verdict_cp["status"] != "approved"):
-        result = {**base, "stage": "verdict", "stage_label": STAGE_LABELS["verdict"],
-                  "action": {"type": "checkpoint", "kind": "verdict", "summary": "人工判断这条成片是否可用",
-                             "subject": verdict_subject, "options": ["可用", "要求修改", "不用"]},
-                  "blocking_checkpoint": verdict_cp}
-        return _with_manual(result)
-    if decision.get("decision") == "repair":
-        result = {**base, "stage": "review", "stage_label": STAGE_LABELS["review"],
-                  "action": {"type": "human", "summary": "闸门要求返修，请按 review 中的 retry_from 处理", "command": "查看评审记录"}}
-        return _with_manual(result)
-    publish_subject = {"take": take, "account": "", "url": ""}
-    publish_cp = _checkpoint(product, run_id, "publish", publish_subject)
-    if not publish_cp or publish_cp["status"] == "pending":
-        result = {**base, "stage": "publish", "stage_label": STAGE_LABELS["publish"],
-                  "action": {"type": "checkpoint", "kind": "publish", "summary": "记录是否发布、发布账号和链接",
-                             "subject": publish_subject, "options": ["已发布", "暂不发布"]}, "blocking_checkpoint": publish_cp}
-        return _with_manual(result)
+    for take in final_takes:
+        decision, verdict_subject = _verdict_subject(run_dir, take)
+        if decision.get("decision") == "repair":
+            result = {**base, "stage": "review", "stage_label": STAGE_LABELS["review"],
+                      "action": {"type": "human", "summary": f"{take} 的闸门要求返修，请按 review 中的 retry_from 处理", "command": "查看评审记录"}}
+            return _with_manual(result)
+        if decision.get("decision") not in ("pass", "escalate"):
+            result = {**base, "stage": "review", "stage_label": STAGE_LABELS["review"],
+                      "action": {"type": "human", "summary": f"{take} 的闸门结论无法自动推进：{decision.get('decision') or '缺失'}",
+                                 "command": "查看评审记录"}}
+            return _with_manual(result)
+        verdict_cp = _checkpoint(product, run_id, "verdict", verdict_subject)
+        if decision.get("decision") in ("pass", "escalate") and (not verdict_cp or verdict_cp["status"] == "pending"):
+            result = {**base, "stage": "verdict", "stage_label": STAGE_LABELS["verdict"],
+                      "action": {"type": "checkpoint", "kind": "verdict", "summary": f"人工判断成片 {take} 是否可用",
+                                 "subject": verdict_subject, "options": ["可用", "要求修改", "不用"]},
+                      "blocking_checkpoint": verdict_cp}
+            return _with_manual(result)
+        if verdict_cp and verdict_cp["status"] == "approved":
+            publish_subject = {"take": take, "account": "", "url": ""}
+            publish_cp = _checkpoint(product, run_id, "publish", publish_subject)
+            if not publish_cp or publish_cp["status"] == "pending":
+                result = {**base, "stage": "publish", "stage_label": STAGE_LABELS["publish"],
+                          "action": {"type": "checkpoint", "kind": "publish", "summary": f"记录成片 {take} 是否发布、发布账号和链接",
+                                     "subject": publish_subject, "options": ["已发布", "暂不发布"]}, "blocking_checkpoint": publish_cp}
+                return _with_manual(result)
     return _with_manual({**base, "stage": "done", "stage_label": STAGE_LABELS["done"], "action": None})
 
 
@@ -193,7 +341,8 @@ def advance(product, run=None, dry_run=False, runner=None):
         if cp["status"] == "approved":
             return 0, {**current, "blocking_checkpoint": cp, "message": "确认节点已自动批准；再次运行 next 继续"}
         return 3, {**current, "blocking_checkpoint": cp,
-                   "message": f"等待确认：{cp['summary']}；批准命令：python3 kit/studio.py approve {cp['id']}"}
+                   "message": f"等待确认：{cp['summary']}；打开确认台：python3 kit/studio.py console；"
+                              f"也可使用命令批准：python3 kit/studio.py approve {cp['id']}"}
     if dry_run:
         return 0, {**current, "message": "dry-run：未执行", "would_run": action.get("command")}
     if action["type"] == "human":
