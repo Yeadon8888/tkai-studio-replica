@@ -69,6 +69,7 @@ DEFAULTS = {
     "LIMIT_TIKHUB_CALLS": "100",
     "LIMIT_TEXT_CALLS": "100",
     "PRODUCT_BUDGET_CNY": "5",
+    "AUTO_APPROVE_CNY": "0",
     "TIER_WEIGHTS": "H:4,M:3,L:2,X:1",
     "FISSION_MAX_N": "5",
     "MAX_ATTEMPTS": "3",

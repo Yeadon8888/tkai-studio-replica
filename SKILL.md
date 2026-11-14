@@ -28,9 +28,12 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/pdca.md` | 每条视频、每个品的计划—执行—检查—改进 |
 | `references/budget-and-queue.md` | 预算、品目录、多品任务队列 |
 | `references/commands.md` | 每条命令的参数 |
+| `references/workflow.md` | 数据推导阶段、人工确认节点与 `studio next` |
 | `references/versioning.md` | 发新版本、写变更记录、升级配置 |
 
 ## 流程（一个品走一遍）
+
+每一步先跑 `python3 kit/studio.py next --product <品>`，按它的输出执行或等人确认；不得跳过节点直接调用付费命令。以下步骤解释各阶段的业务含义，实际下一步以引擎按数据推导的结果为准。
 
 1. **定品**：建品目录，写产品卡，框定产品事实和产品锚点；用 `products.py new-run` 在品下新建本次运行。不确定的事实不进提示词。
 2. **找对标**（两条路，可以混用）：
