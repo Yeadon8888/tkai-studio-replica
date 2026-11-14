@@ -82,6 +82,25 @@ class CheckpointRules(StudioCase):
 
 
 class EngineRules(StudioCase):
+    def test_adopt_copies_benchmark_cover_from_project_research_batch(self):
+        batch = self.home / "research" / "batch-1"
+        (batch / "covers").mkdir(parents=True)
+        (batch / "covers" / "123.jpg").write_bytes(b"cover")
+        (batch / "candidates.json").write_text(json.dumps([
+            {"candidate_id": "C023", "aweme_id": "123"}
+        ]), encoding="utf-8")
+        (self.run / "shots.json").write_text(json.dumps({
+            "candidate_id": "C023", "aweme_id": "123"
+        }), encoding="utf-8")
+        project = json.loads((self.run / "project.json").read_text(encoding="utf-8"))
+        project["research_dir"] = str(batch)
+        (self.run / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        result = engine.adopt("p1", self.run.name)
+
+        self.assertEqual((self.run / "benchmark" / "cover.jpg").read_bytes(), b"cover")
+        self.assertEqual(result["benchmark_media"]["cover"]["status"], "copied")
+
     def test_benchmark_selection_reads_shots_and_tier_override(self):
         batch = products.product_dir("p1") / "research" / "batch-1"
         batch.mkdir(parents=True)
@@ -159,6 +178,16 @@ class EngineRules(StudioCase):
         self.assertEqual([row["decision"]["decision"] for row in history], ["pass", "escalate"])
         log = (products.product_dir("p1") / "checkpoints" / "log.jsonl").read_text()
         self.assertIn('"event": "subject_updated"', log)
+
+    def test_legacy_review_time_uses_file_time_only_for_ordering(self):
+        takes = self.run / "takes"; takes.mkdir()
+        reviews = self.run / "reviews"; reviews.mkdir()
+        (takes / "T1.mp4").write_bytes(b"video")
+        (reviews / "T1.decision.json").write_text(json.dumps({"decision": "pass"}), encoding="utf-8")
+
+        history = engine.review_history(self.run, "T1")
+
+        self.assertEqual(history[0]["reviewed_at"], "旧记录（按文件时间）")
 
     def test_review_requires_registered_product_references(self):
         products.select_benchmarks("p1", ["C1"])

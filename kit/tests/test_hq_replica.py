@@ -48,6 +48,27 @@ class ShotListValidation(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "空隙|重叠"):
                 shot_list.validate(data)
 
+    def test_build_copies_benchmark_cover_into_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, batch = root / "run", root / "research" / "batch"
+            run.mkdir(); (batch / "covers").mkdir(parents=True); (batch / "videos").mkdir()
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "aweme_id": "123", "url": "https://example.test/video"
+            }]), encoding="utf-8")
+            (batch / "covers" / "123.jpg").write_bytes(b"cover")
+            (batch / "videos" / "123.mp4").write_bytes(b"video")
+
+            result = shot_list.build(
+                run, batch, "C023",
+                model_call=lambda *_args, **_kwargs: json.dumps(shots()),
+                reachable=lambda _url: True,
+            )
+
+            self.assertEqual((run / "benchmark" / "cover.jpg").read_bytes(), b"cover")
+            self.assertEqual((run / "benchmark" / "video.mp4").read_bytes(), b"video")
+            self.assertEqual(result["benchmark_media"]["cover"]["status"], "copied")
+
 
 class ShotPlanRoutes(unittest.TestCase):
     def test_groups_continuous_shots_and_uses_scene_first(self):

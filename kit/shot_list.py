@@ -2,6 +2,7 @@
 """整条对标视频 → 连续镜头表 ``shots.json``。"""
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(KIT))
 
 from common import read_json, write_json  # noqa: E402
 import loop  # noqa: E402
+import settings  # noqa: E402
 import tt_research as tt  # noqa: E402
 
 
@@ -33,6 +35,82 @@ REQUIRED = ("id", "start", "end", "scale", "camera", "action", "onscreen_text",
             "redo_reason", "end_state")
 JOINS = ("cut", "continuous", "match_cut")
 KEEP = ("keep", "redo")
+
+
+def research_batch(project, shots=None, explicit=None):
+    """从命令参数、镜头表、运行元数据或 BOARD_RESEARCH 解析调研批次。"""
+    project = Path(project)
+    shots = shots or {}
+    meta = read_json(project / "project.json", {}) or {}
+    values = [explicit, shots.get("research_batch"), meta.get("research_batch"),
+              meta.get("research_dir"), settings.get("BOARD_RESEARCH")]
+    for value in (item for item in values if item):
+        raw = Path(value).expanduser()
+        if raw.is_absolute():
+            choices = [raw]
+        else:
+            choices = [settings.workspace_root() / raw, settings.studio_home() / raw,
+                       Path(settings.get("RESEARCH_ROOT")) / raw]
+            research_root = Path(settings.get("RESEARCH_ROOT"))
+            if not research_root.is_absolute():
+                research_root = settings.workspace_root() / research_root
+            choices.append(research_root / raw)
+        batch = next((path.resolve() for path in choices if path.is_dir()), None)
+        if batch:
+            return batch
+    return None
+
+
+def _candidate(batch, candidate_id):
+    rows = read_json(batch / "candidates.json", []) or []
+    return next((row for row in rows
+                 if str(row.get("candidate_id") or row.get("id") or "") == str(candidate_id or "")), {})
+
+
+def copy_benchmark_media(project, shots=None, batch=None):
+    """把调研封面和已有视频复制到运行目录；缺失时返回原因而不中断流程。"""
+    project, shots = Path(project), shots or {}
+    batch = research_batch(project, shots, batch)
+    result = {"batch": str(batch) if batch else ""}
+    if not batch:
+        reason = "无法从 shots.json、project.json 或 BOARD_RESEARCH 确定调研批次"
+        result.update(cover={"status": "missing", "reason": reason},
+                      video={"status": "missing", "reason": reason})
+        return result
+
+    candidate_id = shots.get("candidate_id")
+    candidate = _candidate(batch, candidate_id)
+    aweme_id = str(shots.get("aweme_id") or candidate.get("aweme_id") or "")
+    names = [name for name in (aweme_id, str(candidate_id or "")) if name]
+    cover_sources = [batch / "covers" / f"{name}{suffix}"
+                     for name in names for suffix in (".jpg", ".jpeg")]
+    local_file = candidate.get("local_file")
+    video_sources = []
+    if local_file:
+        local_path = Path(local_file).expanduser()
+        video_sources.append(local_path if local_path.is_absolute() else batch / local_path)
+    video_sources.extend(root / f"{name}.mp4"
+                         for root in (batch / "videos", batch / "media") for name in names)
+
+    output = project / "benchmark"
+    for kind, sources, filename in (("cover", cover_sources, "cover.jpg"),
+                                    ("video", video_sources, "video.mp4")):
+        target = output / filename
+        source = next((path for path in sources if path.is_file()), None)
+        if not source:
+            if target.is_file():
+                result[kind] = {"status": "existing", "path": str(target.relative_to(project))}
+            else:
+                result[kind] = {"status": "missing", "reason": f"调研批次没有可用的对标{'封面' if kind == 'cover' else '视频'}"}
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            result[kind] = {"status": "copied", "source": str(source),
+                            "path": str(target.relative_to(project))}
+        except OSError as exc:
+            result[kind] = {"status": "missing", "reason": f"复制失败：{exc}"}
+    return result
 
 
 def _validate_timeline(rows, duration, label, name_key):
@@ -134,6 +212,7 @@ def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.med
                   reference_url=candidate.get("url") or source, source_video_url=source)
     result.update(research_batch=str(batch.resolve()), reference_author=candidate.get("author") or "",
                   reference_title=candidate.get("title") or candidate.get("desc") or "")
+    result["benchmark_media"] = copy_benchmark_media(project, result, batch)
     write_json(project / "shots.json", result)
     return result
 
