@@ -107,6 +107,12 @@ class EvidenceRetry(unittest.TestCase):
             self.assertEqual((project / "reviews/T.json").read_text(encoding="utf-8"), old)
             saved = json.loads((project / "reviews/T-r10.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["source_take"], "T")
+            self.assertEqual(saved["take"], "T")
+            self.assertEqual(saved["review_id"], "T-r10")
+            self.assertTrue(saved["reviewed_at"])
+            decision = json.loads((project / "reviews/T-r10.decision.json").read_text(encoding="utf-8"))
+            self.assertEqual((decision["take"], decision["review_id"]), ("T", "T-r10"))
+            self.assertTrue(decision["reviewed_at"])
             with self.assertRaises(FileExistsError):
                 review_panel.review_take(project, "T", [], review_id="T-r10")
 

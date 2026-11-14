@@ -7,12 +7,16 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+import urllib.error
+import urllib.request
 
 import calibrate
 import checkpoints
 import engine
+import ledger
 import models
 import products
+import review_panel
 import settings
 from common import read_json
 
@@ -31,10 +35,21 @@ def _product_ids():
 
 
 def status_rows():
-    return [engine.status(product) for product in _product_ids()]
+    rows = []
+    for product in _product_ids():
+        row = engine.status(product)
+        action = row.get("action") or {}
+        if action.get("type") == "checkpoint" and not row.get("blocking_checkpoint"):
+            row["blocking_checkpoint"] = checkpoints.create(
+                product, row.get("run"), action["kind"], action["summary"],
+                action["subject"], action.get("options"))
+        rows.append(row)
+    return rows
 
 
 def pending_rows():
+    # 首页并发请求时也保证先物化当前阻塞节点；create 本身幂等。
+    status_rows()
     rows = checkpoints.pending()
     return sorted(rows, key=lambda row: (row.get("kind") not in PAID_BLOCKERS,
                                           row.get("created", ""), row.get("id", "")))
@@ -49,6 +64,17 @@ def _media_url(path):
         return ""
     from urllib.parse import quote
     return "/media/" + quote(rel.as_posix(), safe="/")
+
+
+def _research_media_url(path):
+    path = Path(path).resolve()
+    root = _research_root().resolve()
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return ""
+    from urllib.parse import quote
+    return "/research-media/" + quote(rel.as_posix(), safe="/")
 
 
 def _paths(subject, key):
@@ -121,6 +147,111 @@ def _find_candidate(value, candidate_id):
     return None
 
 
+def _remote_video(url):
+    if not str(url or "").startswith(("http://", "https://")):
+        return False
+    try:
+        request = urllib.request.Request(url, headers={"Range": "bytes=0-0", "User-Agent": "StudioConsole/1"})
+        with urllib.request.urlopen(request, timeout=4) as response:
+            return response.status in (200, 206) and (
+                response.headers.get_content_type().startswith("video/") or response.status == 206)
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
+
+
+def _batch_dir(shots):
+    value = shots.get("research_batch")
+    if value:
+        path = Path(value)
+        if not path.is_absolute():
+            choices = [settings.studio_home() / value, _research_root() / value]
+            path = next((candidate for candidate in choices if candidate.is_dir()), choices[0])
+        return path if path.is_dir() else None
+    candidate_id, aweme_id = str(shots.get("candidate_id") or ""), str(shots.get("aweme_id") or "")
+    for path in _research_root().glob("*/candidates.json") if _research_root().exists() else ():
+        candidate = _find_candidate(read_json(path, []), candidate_id)
+        if candidate and (not aweme_id or str(candidate.get("aweme_id") or "") == aweme_id):
+            return path.parent
+    return None
+
+
+def _research_root():
+    configured = Path(settings.get("RESEARCH_ROOT"))
+    configured = configured if configured.is_absolute() else settings.workspace_root() / configured
+    local = settings.studio_home() / "research"
+    return configured if configured.exists() or not local.exists() else local
+
+
+def _reference_detail(run_dir, brief, shots):
+    candidate_id, aweme_id = shots.get("candidate_id"), shots.get("aweme_id")
+    batch = _batch_dir(shots)
+    local_values = []
+    for source in (brief, shots):
+        local_values.extend(source.get(key) for key in
+                            ("replication_reference_file", "reference_file", "source_video_file", "local_file")
+                            if source.get(key))
+    if batch and (batch / "candidates.json").is_file():
+        candidate = _find_candidate(read_json(batch / "candidates.json", []), candidate_id)
+        if candidate and candidate.get("local_file"):
+            value = Path(candidate["local_file"])
+            local_values.append(value if value.is_absolute() else batch / value)
+    names = [str(value) for value in (aweme_id, candidate_id) if value]
+    local_paths = [Path(value) if Path(value).is_absolute() else run_dir / value for value in local_values]
+    local_paths += [run_dir / "reference.mp4"]
+    for root in (run_dir / "benchmarks", run_dir / "media", batch / "videos" if batch else None,
+                 batch / "media" if batch else None):
+        if root:
+            local_paths.extend(root / f"{name}{suffix}" for name in names
+                               for suffix in (".mp4", ".mov", ".webm", ".m4v"))
+    local = next((path for path in local_paths if path.is_file()), None)
+    local_url = (_media_url(local) or _research_media_url(local)) if local else ""
+
+    remote_values = [brief.get("replication_reference"), shots.get("source_video_url")]
+    remote = next((value for value in remote_values if value and _remote_video(value)), "")
+    original = shots.get("reference_url") or brief.get("reference_url") or ""
+
+    cover_paths = []
+    for root in (run_dir / "covers", batch / "covers" if batch else None):
+        if root:
+            cover_paths.extend(root / f"{name}{suffix}" for name in names
+                               for suffix in (".jpg", ".jpeg", ".png", ".webp"))
+    cover = next((path for path in cover_paths if path.is_file()), None)
+    return {
+        "reference_video": local_url or remote,
+        "reference_source": "local" if local_url else ("remote" if remote else "cover" if cover else "missing"),
+        "reference_cover": (_media_url(cover) or _research_media_url(cover)) if cover else "",
+        "reference_original": original,
+        "reference_expired": not bool(local_url or remote),
+        "reference_refresh_hint": "播放地址已过期；如需刷新封面，请运行 python3 kit/covers.py --refresh",
+    }
+
+
+DIMENSION_LABELS = {
+    "product_consistency": "产品一致性", "soul_fidelity": "灵魂还原",
+    "person_consistency": "人物一致性", "visual_quality": "画面质量",
+    "audio_text": "口播与字幕", "pacing_structure": "节奏结构",
+    "platform_signals": "平台信号", "replication_fidelity": "对标还原度",
+}
+
+
+def _uncited_low_text(rows):
+    experts = review_panel.load_experts().get("experts") or []
+    by_id = {str(row.get("id")): row.get("name") for row in experts}
+    by_number = {index: row.get("name") for index, row in enumerate(experts, 1)}
+    grouped = {}
+    for item in rows or []:
+        name = item.get("judge_name") or by_id.get(str(item.get("judge_id") or ""))
+        if not name:
+            try:
+                name = by_number.get(int(item.get("judge")))
+            except (TypeError, ValueError):
+                name = None
+        name = name or f"专家{item.get('judge', '?')}"
+        label = DIMENSION_LABELS.get(item.get("dim"), item.get("dim") or "未注明维度")
+        grouped.setdefault(name, []).append(f"{label} {item.get('score', '未知')} 分")
+    return [f"{name}：{'、'.join(values)}——未写原因" for name, values in grouped.items()]
+
+
 def _benchmark_detail(row):
     result = []
     for source in (row.get("subject") or {}).get("selected") or []:
@@ -157,9 +288,9 @@ def _verdict_detail(row):
     subject = row.get("subject") or {}
     run_dir = settings.studio_home() / "products" / row["product"] / "runs" / row["run"]
     take = subject.get("take")
-    review_path = settings.studio_home() / subject.get("review", "")
-    decision = read_json(review_path, {}) or {}
-    full = read_json(review_path.with_name(f"{take}.json"), {}) or {}
+    history = engine.review_history(run_dir, take)
+    latest = history[-1] if history else {"decision": {}, "record": {}, "reviewed_at": ""}
+    decision, full = latest["decision"], latest["record"]
     issues = []
     for expert in full.get("experts") or []:
         judge = expert.get("judge") or {}
@@ -174,10 +305,17 @@ def _verdict_detail(row):
                                "at": at, "detail": notes[:500]})
     brief = read_json(run_dir / "briefs" / f"{take}.json", {}) or {}
     shots = read_json(run_dir / "shots.json", {}) or {}
+    usage = ledger.usage_by_project(row["run"])
+    review_rows = [{"review_id": item["review_id"], "reviewed_at": item["reviewed_at"],
+                    "decision": item["decision"].get("decision")} for item in reversed(history)]
     return {"take": take, "video": _media_url(run_dir / "takes" / f"{take}.mp4"),
-            "reference_video": brief.get("replication_reference") or shots.get("source_video_url") or shots.get("reference_url") or "",
+            **_reference_detail(run_dir, brief, shots),
             "decision": decision, "review": full, "issues": issues,
-            "uncited_low": decision.get("uncited_low") or []}
+            "uncited_low": decision.get("uncited_low") or [],
+            "uncited_low_text": _uncited_low_text(decision.get("uncited_low") or []),
+            "reviewed_at": latest.get("reviewed_at") or "", "review_history": review_rows,
+            "duration": brief.get("duration") or (full.get("machine") or {}).get("facts", {}).get("duration"),
+            "cost_cny": usage["video_cny"]}
 
 
 def checkpoint_detail(checkpoint_id):
@@ -253,7 +391,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/checkpoint/"):
                 self._json(checkpoint_detail(unquote(path.removeprefix("/api/checkpoint/")))); return
             if path.startswith("/media/"):
-                self._serve_media(unquote(path.removeprefix("/media/"))); return
+                self._serve_media(unquote(path.removeprefix("/media/")), settings.studio_home() / "products"); return
+            if path.startswith("/research-media/"):
+                self._serve_media(unquote(path.removeprefix("/research-media/")), _research_root()); return
             self._json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
         except KeyError as exc:
             self._error(exc, HTTPStatus.NOT_FOUND)
@@ -289,8 +429,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             self._error(exc)
 
-    def _serve_media(self, relative):
-        root = (settings.studio_home() / "products").resolve()
+    def _serve_media(self, relative, root):
+        root = Path(root).resolve()
         target = (root / relative).resolve()
         try:
             target.relative_to(root)
@@ -317,7 +457,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
         with target.open("rb") as handle:
-            handle.seek(start); self.wfile.write(handle.read(length))
+            handle.seek(start)
+            try:
+                self.wfile.write(handle.read(length))
+            except (BrokenPipeError, ConnectionResetError):
+                # 浏览器切换页面或只探测视频 Range 时会主动断开，不是服务错误。
+                return
 
 
 def make_server(port=DEFAULT_PORT, server_class=ThreadingHTTPServer):

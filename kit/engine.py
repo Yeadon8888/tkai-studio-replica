@@ -1,4 +1,5 @@
 """由文件数据推导工作流阶段，并且一次只推进一步。"""
+import datetime as dt
 import json
 import subprocess
 import sys
@@ -133,11 +134,60 @@ def _final_takes(run_dir):
     return takes
 
 
+def _review_time(record, decision, *paths):
+    for source in (record, decision):
+        for key in ("reviewed_at", "reevaluated_at", "created_at", "time", "timestamp"):
+            if source.get(key):
+                return str(source[key])
+    stamp = max((path.stat().st_mtime for path in paths if path.exists()), default=0)
+    return dt.datetime.fromtimestamp(stamp, dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def review_history(run_dir, take):
+    """返回同一成片的历次评审，最新一条在最后。"""
+    reviews = run_dir / "reviews"
+    if not reviews.exists():
+        return []
+    take_ids = sorted((path.stem for path in (run_dir / "takes").glob("*.mp4")
+                       if not path.stem.endswith(".raw")), key=len, reverse=True)
+    rows = []
+    for decision_path in reviews.glob("*.decision.json"):
+        review_id = decision_path.name.removesuffix(".decision.json")
+        record_path = reviews / f"{review_id}.json"
+        decision = read_json(decision_path, {}) or {}
+        record = read_json(record_path, {}) or {}
+        explicit = record.get("source_take") or record.get("take") or decision.get("take")
+        if explicit in take_ids:
+            record_take = explicit
+        else:
+            record_take = next((name for name in take_ids
+                                if review_id == name or review_id.startswith(name + "-")), review_id)
+        if record_take != take:
+            continue
+        reviewed_at = _review_time(record, decision, record_path, decision_path)
+        rows.append({"take": take, "review_id": review_id, "reviewed_at": reviewed_at,
+                     "decision": decision, "record": record,
+                     "review": str(decision_path.relative_to(settings.studio_home()))})
+    return sorted(rows, key=lambda row: (row["reviewed_at"], row["review_id"]))
+
+
 def _verdict_subject(run_dir, take):
-    decision_path = run_dir / "reviews" / f"{take}.decision.json"
-    decision = read_json(decision_path, {}) or {}
+    history = review_history(run_dir, take)
+    if not history:
+        return {}, {"take": take, "decision": None, "review": "", "reviewed_at": ""}
+    latest = history[-1]
+    decision = latest["decision"]
     return decision, {"take": take, "decision": decision.get("decision"),
-                      "review": str(decision_path.relative_to(settings.studio_home()))}
+                      "review": latest["review"], "reviewed_at": latest["reviewed_at"]}
+
+
+def _verdict_checkpoint(product, run, take, subject, summary):
+    existing = next((row for row in _run_checkpoints(product, run)
+                     if row.get("kind") == "verdict" and
+                     (row.get("subject") or {}).get("take") == take), None)
+    if existing and existing.get("subject") != subject:
+        return checkpoints.update_subject(existing["id"], summary, subject)
+    return existing or _checkpoint(product, run, "verdict", subject)
 
 
 def adopt(product, run=None):
@@ -274,8 +324,7 @@ def status(product, run=None):
     if not final_takes:
         final_takes = [takes[0].stem]
     for take in final_takes:
-        decision_path = run_dir / "reviews" / f"{take}.decision.json"
-        if decision_path.exists():
+        if review_history(run_dir, take):
             continue
         refs = _registered_references(meta)
         if not refs:
@@ -298,10 +347,11 @@ def status(product, run=None):
                       "action": {"type": "human", "summary": f"{take} 的闸门结论无法自动推进：{decision.get('decision') or '缺失'}",
                                  "command": "查看评审记录"}}
             return _with_manual(result)
-        verdict_cp = _checkpoint(product, run_id, "verdict", verdict_subject)
+        verdict_summary = f"人工判断成片 {take} 是否可用"
+        verdict_cp = _verdict_checkpoint(product, run_id, take, verdict_subject, verdict_summary)
         if decision.get("decision") in ("pass", "escalate") and (not verdict_cp or verdict_cp["status"] == "pending"):
             result = {**base, "stage": "verdict", "stage_label": STAGE_LABELS["verdict"],
-                      "action": {"type": "checkpoint", "kind": "verdict", "summary": f"人工判断成片 {take} 是否可用",
+                      "action": {"type": "checkpoint", "kind": "verdict", "summary": verdict_summary,
                                  "subject": verdict_subject, "options": ["可用", "要求修改", "不用"]},
                       "blocking_checkpoint": verdict_cp}
             return _with_manual(result)

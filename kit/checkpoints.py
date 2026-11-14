@@ -75,6 +75,19 @@ def create(product, run, kind, summary, subject, options=None):
                 _append(product, "resolved", row, automatic=True, budget=budget)
     return row
 
+
+def update_subject(checkpoint_id, summary, subject):
+    """保留节点身份，主题变化后重新待确认，并留下旧主题与处理结果。"""
+    row = get(checkpoint_id)
+    before = {"summary": row.get("summary"), "subject": row.get("subject")}
+    if before == {"summary": str(summary), "subject": subject}:
+        return row
+    row.update(summary=str(summary), subject=subject, status="pending", decided_by="",
+               decided_at="", note="")
+    write_json(_root(row["product"]) / f"{row['id']}.json", row)
+    _append(row["product"], "subject_updated", row, before=before)
+    return row
+
 def get(checkpoint_id, product=None):
     if product:
         path = _root(product) / f"{checkpoint_id}.json"

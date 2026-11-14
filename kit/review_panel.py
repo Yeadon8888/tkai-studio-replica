@@ -10,6 +10,7 @@
 """
 import argparse
 import copy
+import datetime as dt
 import json
 import os
 import re
@@ -31,6 +32,18 @@ from common import _read, _write, parse_json, read_anchor  # noqa: E402
 import loop  # noqa: E402  (提供 gemini()、_frames()、_data_uri())
 
 EXPERTS_PATH = os.path.join(KIT, "config", "experts.yaml")
+
+
+def _now():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def _save_review(project, review_id, take, record, decision, reviewed_at=None):
+    reviewed_at = reviewed_at or _now()
+    record.update(take=take, review_id=review_id, reviewed_at=reviewed_at, decision=decision)
+    saved_decision = dict(decision, take=take, review_id=review_id, reviewed_at=reviewed_at)
+    _write(project / "reviews" / f"{review_id}.json", record)
+    _write(project / "reviews" / f"{review_id}.decision.json", saved_decision)
 
 
 def brief_duration(brief):
@@ -219,8 +232,7 @@ def aggregate_segment_reviews(project, take, segment_ids, brief):
               "generation": {"model": parent_job.get("model"), "resolution": parent_job.get("resolution"),
                              "video_route": parent_job.get("video_route")},
               "segments": segment_rows, "experts": experts, "decision": decision, "versions": settings.stamp()}
-    _write(project / "reviews" / f"{take}.json", record)
-    _write(project / "reviews" / f"{take}.decision.json", decision)
+    _save_review(project, take, take, record, decision)
     return decision
 
 
@@ -467,7 +479,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
     if job.get("composed") and job.get("resolution"):
         check_brief["resolution"] = job["resolution"]
     mc = machine_checks(video, check_brief)
-    record = {"take": output_take, "attempt": attempt, "mode": "video", "machine": mc,
+    record = {"take": take, "review_id": output_take, "attempt": attempt, "mode": "video", "machine": mc,
               "experts": [], "versions": settings.stamp()}
     if output_take != take:
         record["source_take"] = take
@@ -478,9 +490,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
         decision = {"attempt": attempt, "decision": "repair", "stage": "glitches", "retry_from": "generate",
                     "reason": "机器检查未通过：" + "；".join(mc["blocking"]),
                     "weighted": None, "low_dimensions": [], "vetoes": []}
-        record["decision"] = decision
-        _write(project / "reviews" / f"{output_take}.json", record)
-        _write(project / "reviews" / f"{output_take}.decision.json", decision)
+        _save_review(project, output_take, take, record, decision)
         return decision
     mode, video_url, upload_info = _video_source(project, take, video, brief)
     record["mode"] = mode
@@ -521,16 +531,12 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
         record["expert_failures"] = failed
         decision = {"attempt": attempt, "decision": None,
                     "reason": f"专家评审未完成：{', '.join(x['id'] for x in failed)}，需重跑评审（不重生成视频）"}
-        record["decision"] = decision
-        _write(project / "reviews" / f"{output_take}.json", record)
-        _write(project / "reviews" / f"{output_take}.decision.json", decision)
+        _save_review(project, output_take, take, record, decision)
         return decision
     merged = gate.merge_judges(judges)
     res = gate.evaluate(merged, attempt)
     record["merged"] = merged
-    record["decision"] = res
-    _write(project / "reviews" / f"{output_take}.json", record)
-    _write(project / "reviews" / f"{output_take}.decision.json", res)
+    _save_review(project, output_take, take, record, res)
     return res
 
 
@@ -552,8 +558,9 @@ def reevaluate(project, take):
     rec["merged"] = merged
     rec["decision"] = res
     rec["reevaluated"] = True
-    _write(rec_path, rec)
-    _write(project / "reviews" / f"{take}.decision.json", res)
+    rec["reevaluated_at"] = _now()
+    source_take = rec.get("source_take") or rec.get("take") or take
+    _save_review(project, take, source_take, rec, res, rec["reevaluated_at"])
     return res
 
 

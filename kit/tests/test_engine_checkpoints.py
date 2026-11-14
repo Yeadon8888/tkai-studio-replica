@@ -125,6 +125,41 @@ class EngineRules(StudioCase):
         log = (products.product_dir("p1") / "checkpoints" / "log.jsonl").read_text()
         self.assertIn('"decided_by": "migration"', log)
 
+    def test_latest_review_updates_existing_verdict_checkpoint(self):
+        (self.run / "shots.json").write_text(json.dumps({"candidate_id": "C023"}), encoding="utf-8")
+        briefs = self.run / "briefs"; briefs.mkdir()
+        takes = self.run / "takes"; takes.mkdir()
+        reviews = self.run / "reviews"; reviews.mkdir()
+        (briefs / "hq-c023.json").write_text(json.dumps({"id": "hq-c023", "estimated_cny": 1}), encoding="utf-8")
+        (takes / "hq-c023.mp4").write_bytes(b"video")
+        old = {"take": "hq-c023", "reviewed_at": "2026-11-13T01:00:00+00:00",
+               "decision": {"decision": "pass"}}
+        (reviews / "hq-c023.json").write_text(json.dumps(old), encoding="utf-8")
+        (reviews / "hq-c023.decision.json").write_text(json.dumps({
+            "take": "hq-c023", "reviewed_at": old["reviewed_at"], "decision": "pass"}), encoding="utf-8")
+        engine.adopt("p1", self.run.name)
+        code, result = engine.advance("p1", self.run.name)
+        self.assertEqual(code, 3)
+        checkpoint_id = result["blocking_checkpoint"]["id"]
+        checkpoints.resolve(checkpoint_id, "approved", "旧评审可用", "测试")
+
+        latest = {"take": "hq-c023", "source_take": "hq-c023",
+                  "reviewed_at": "2026-11-13T02:00:00+00:00",
+                  "decision": {"decision": "escalate"}}
+        (reviews / "hq-c023-r10.json").write_text(json.dumps(latest), encoding="utf-8")
+        (reviews / "hq-c023-r10.decision.json").write_text(json.dumps({
+            "reviewed_at": latest["reviewed_at"], "decision": "escalate"}), encoding="utf-8")
+        state = engine.status("p1", self.run.name)
+        updated = state["blocking_checkpoint"]
+        self.assertEqual(updated["id"], checkpoint_id)
+        self.assertEqual(updated["status"], "pending")
+        self.assertEqual(updated["subject"]["decision"], "escalate")
+        self.assertTrue(updated["subject"]["review"].endswith("hq-c023-r10.decision.json"))
+        history = engine.review_history(self.run, "hq-c023")
+        self.assertEqual([row["decision"]["decision"] for row in history], ["pass", "escalate"])
+        log = (products.product_dir("p1") / "checkpoints" / "log.jsonl").read_text()
+        self.assertIn('"event": "subject_updated"', log)
+
     def test_review_requires_registered_product_references(self):
         products.select_benchmarks("p1", ["C1"])
         (products.product_dir("p1") / "plan.json").write_text("{}", encoding="utf-8")
