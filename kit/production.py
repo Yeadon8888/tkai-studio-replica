@@ -114,6 +114,7 @@ def build(path, rubric=None):
                            weighted=explicit.get("weighted"), decision=explicit.get("decision"),
                            stage=explicit.get("stage"), retry_from=explicit.get("retry_from"),
                            reason=explicit.get("reason"), low_dimensions=explicit.get("low_dimensions") or [],
+                           uncited_low=explicit.get("uncited_low") or [],
                            issues=[{"cause": i.get("cause"), "at": i.get("at"), "detail": i.get("detail")}
                                    for i in merged.get("issues", []) if i.get("detail")])
             elif row["machine_blocking"] and not reviews:
@@ -128,7 +129,6 @@ def build(path, rubric=None):
                            weighted=res.get("weighted"), decision=res.get("decision"),
                            stage=res.get("stage"), retry_from=res.get("retry_from"),
                            reason=res.get("reason"), uncited_low=res.get("uncited_low"),
-                           needs_human_look=res.get("needs_human_look", False),
                            issues=[{"cause": i.get("cause"), "at": i.get("at"), "detail": i.get("detail")}
                                    for i in merged.get("issues", []) if i.get("detail")])
             row["grade"] = grade(row, floor)

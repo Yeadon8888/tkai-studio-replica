@@ -68,7 +68,10 @@ def merge_judges(reviews):
     for idx, r in enumerate(reviews):
         n, u = normalize_review(r)
         norm.append(n)
-        uncited += [dict(x, judge=idx + 1) for x in u]
+        judge = r.get("judge") or {}
+        judge_id = judge.get("id") if isinstance(judge, dict) else str(judge)
+        judge_name = judge.get("name") if isinstance(judge, dict) else None
+        uncited += [dict(x, judge=idx + 1, judge_id=judge_id, judge_name=judge_name) for x in u]
     dims = {}
     for r in norm:
         for k, v in r["scores"].items():
@@ -95,11 +98,16 @@ def evaluate(review, attempt, rubric=None):
     out.update(weighted=round(weighted, 2), low_dimensions=low, vetoes=vetoes)
     if review.get("uncited_low"):
         out["uncited_low"] = review["uncited_low"]
+        labels = []
+        for item in review["uncited_low"]:
+            expert = item.get("judge_name") or item.get("judge_id") or f"专家{item.get('judge', '?')}"
+            labels.append(f"{expert}：{item.get('dim')}（{item.get('score')} 分）")
+        out.update(decision="escalate", stage="review",
+                   reason="需人工看：专家给了低分但没写原因；" + "；".join(labels))
+        return out
     ok = weighted >= R["pass"]["weighted_min"] and not low and not vetoes
     if ok:
         out["decision"] = "pass"
-        if out.get("uncited_low"):
-            out["needs_human_look"] = True
         return out
     # 不通过：与源规则一致。失败归因 = 否决项 + 问题 cause + 低分维度的默认归因；
     # 只保留"最靠前的失败阶段"的原因；修复方案按上游顺序排序，取第一条的 retry_from。
