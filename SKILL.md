@@ -30,6 +30,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/commands.md` | 每条命令的参数 |
 | `references/workflow.md` | 数据推导阶段、人工确认节点与 `studio next` |
 | `references/console.md` | 在本地确认台查看待办、编辑脚本、判定成片 |
+| `references/platform.md` | 从流域中台领取制作请求、配置令牌、启动执行机与排障 |
 | `references/versioning.md` | 发新版本、写变更记录、升级配置 |
 
 ## 流程（一个品走一遍）
@@ -55,6 +56,12 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 ## 高质量逐镜头复刻
 
 `shot_list.py` 按真实切镜输出整体结构、声音类型、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`。出镜说话、纯音乐和环境声默认用 H3 原生音画，出镜台词会写进 `visual_prompt`；画外音和特殊角色音走 TTS。`shot_plan.py` 按连续性合并并在 15 秒边界处分块；没有历史音轨证据的 first-last 接力块自动改走 TTS。`compose.py` 按单元保留原声或混入 TTS，再加字幕和低音量音乐。具体命令见 `references/commands.md`，方法与风险见 `references/long-take.md`。
+
+## 流域中台执行机
+
+中台请求已经由人选择对标、档位与预算上限时，运行 `python3 kit/platform_runner.py --loop`。执行机会领取请求、建品、登记产品图与对标，然后严格循环 `engine.advance`：脚本和预算在中台等待人决定；定场图、生成、合成、评审按批准结果逐步执行；成片上传为项目版本后，现有审核结果回写本地 verdict 与人工决定日志。
+
+令牌必须来自权限为 `600` 的独立文件，并同时具有 `production:run` 与 `uploads:write`。执行机不自动发布，不在异常后换模型或重提付费任务。完整配置和故障处理见 `references/platform.md`。
 
 ## 开工前要问创作者的三件事
 
