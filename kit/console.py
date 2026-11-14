@@ -66,17 +66,6 @@ def _media_url(path):
     return "/media/" + quote(rel.as_posix(), safe="/")
 
 
-def _research_media_url(path):
-    path = Path(path).resolve()
-    root = _research_root().resolve()
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        return ""
-    from urllib.parse import quote
-    return "/research-media/" + quote(rel.as_posix(), safe="/")
-
-
 def _paths(subject, key):
     values = (subject or {}).get(key) or []
     if isinstance(values, str):
@@ -159,67 +148,34 @@ def _remote_video(url):
         return False
 
 
-def _batch_dir(shots):
-    value = shots.get("research_batch")
-    if value:
-        path = Path(value)
-        if not path.is_absolute():
-            choices = [settings.studio_home() / value, _research_root() / value]
-            path = next((candidate for candidate in choices if candidate.is_dir()), choices[0])
-        return path if path.is_dir() else None
-    candidate_id, aweme_id = str(shots.get("candidate_id") or ""), str(shots.get("aweme_id") or "")
-    for path in _research_root().glob("*/candidates.json") if _research_root().exists() else ():
-        candidate = _find_candidate(read_json(path, []), candidate_id)
-        if candidate and (not aweme_id or str(candidate.get("aweme_id") or "") == aweme_id):
-            return path.parent
-    return None
-
-
-def _research_root():
-    configured = Path(settings.get("RESEARCH_ROOT"))
-    configured = configured if configured.is_absolute() else settings.workspace_root() / configured
-    local = settings.studio_home() / "research"
-    return configured if configured.exists() or not local.exists() else local
-
-
 def _reference_detail(run_dir, brief, shots):
     candidate_id, aweme_id = shots.get("candidate_id"), shots.get("aweme_id")
-    batch = _batch_dir(shots)
     local_values = []
     for source in (brief, shots):
         local_values.extend(source.get(key) for key in
                             ("replication_reference_file", "reference_file", "source_video_file", "local_file")
                             if source.get(key))
-    if batch and (batch / "candidates.json").is_file():
-        candidate = _find_candidate(read_json(batch / "candidates.json", []), candidate_id)
-        if candidate and candidate.get("local_file"):
-            value = Path(candidate["local_file"])
-            local_values.append(value if value.is_absolute() else batch / value)
     names = [str(value) for value in (aweme_id, candidate_id) if value]
-    local_paths = [Path(value) if Path(value).is_absolute() else run_dir / value for value in local_values]
-    local_paths += [run_dir / "reference.mp4"]
-    for root in (run_dir / "benchmarks", run_dir / "media", batch / "videos" if batch else None,
-                 batch / "media" if batch else None):
-        if root:
-            local_paths.extend(root / f"{name}{suffix}" for name in names
-                               for suffix in (".mp4", ".mov", ".webm", ".m4v"))
-    local = next((path for path in local_paths if path.is_file()), None)
-    local_url = (_media_url(local) or _research_media_url(local)) if local else ""
+    local_paths = [run_dir / "benchmark" / "video.mp4", run_dir / "reference.mp4"]
+    local_paths.extend(Path(value) if Path(value).is_absolute() else run_dir / value for value in local_values)
+    for root in (run_dir / "benchmarks", run_dir / "media"):
+        local_paths.extend(root / f"{name}{suffix}" for name in names
+                           for suffix in (".mp4", ".mov", ".webm", ".m4v"))
+    local_url = next((_media_url(path) for path in local_paths
+                      if path.is_file() and _media_url(path)), "")
 
     remote_values = [brief.get("replication_reference"), shots.get("source_video_url")]
     remote = next((value for value in remote_values if value and _remote_video(value)), "")
     original = shots.get("reference_url") or brief.get("reference_url") or ""
 
-    cover_paths = []
-    for root in (run_dir / "covers", batch / "covers" if batch else None):
-        if root:
-            cover_paths.extend(root / f"{name}{suffix}" for name in names
-                               for suffix in (".jpg", ".jpeg", ".png", ".webp"))
-    cover = next((path for path in cover_paths if path.is_file()), None)
+    cover_paths = [run_dir / "benchmark" / "cover.jpg"]
+    cover_paths.extend(run_dir / "covers" / f"{name}{suffix}" for name in names
+                       for suffix in (".jpg", ".jpeg", ".png", ".webp"))
+    cover = next((path for path in cover_paths if path.is_file() and _media_url(path)), None)
     return {
         "reference_video": local_url or remote,
         "reference_source": "local" if local_url else ("remote" if remote else "cover" if cover else "missing"),
-        "reference_cover": (_media_url(cover) or _research_media_url(cover)) if cover else "",
+        "reference_cover": _media_url(cover) if cover else "",
         "reference_original": original,
         "reference_expired": not bool(local_url or remote),
         "reference_refresh_hint": "播放地址已过期；如需刷新封面，请运行 python3 kit/covers.py --refresh",
@@ -392,8 +348,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(checkpoint_detail(unquote(path.removeprefix("/api/checkpoint/")))); return
             if path.startswith("/media/"):
                 self._serve_media(unquote(path.removeprefix("/media/")), settings.studio_home() / "products"); return
-            if path.startswith("/research-media/"):
-                self._serve_media(unquote(path.removeprefix("/research-media/")), _research_root()); return
             self._json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
         except KeyError as exc:
             self._error(exc, HTTPStatus.NOT_FOUND)

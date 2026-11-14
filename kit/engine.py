@@ -138,9 +138,11 @@ def _review_time(record, decision, *paths):
     for source in (record, decision):
         for key in ("reviewed_at", "reevaluated_at", "created_at", "time", "timestamp"):
             if source.get(key):
-                return str(source[key])
+                value = str(source[key])
+                return value, value
     stamp = max((path.stat().st_mtime for path in paths if path.exists()), default=0)
-    return dt.datetime.fromtimestamp(stamp, dt.timezone.utc).isoformat(timespec="seconds")
+    sort_time = dt.datetime.fromtimestamp(stamp, dt.timezone.utc).isoformat(timespec="seconds")
+    return "旧记录（按文件时间）", sort_time
 
 
 def review_history(run_dir, take):
@@ -164,11 +166,12 @@ def review_history(run_dir, take):
                                 if review_id == name or review_id.startswith(name + "-")), review_id)
         if record_take != take:
             continue
-        reviewed_at = _review_time(record, decision, record_path, decision_path)
+        reviewed_at, reviewed_at_sort = _review_time(record, decision, record_path, decision_path)
         rows.append({"take": take, "review_id": review_id, "reviewed_at": reviewed_at,
+                     "reviewed_at_sort": reviewed_at_sort,
                      "decision": decision, "record": record,
                      "review": str(decision_path.relative_to(settings.studio_home()))})
-    return sorted(rows, key=lambda row: (row["reviewed_at"], row["review_id"]))
+    return sorted(rows, key=lambda row: (row["reviewed_at_sort"], row["review_id"]))
 
 
 def _verdict_subject(run_dir, take):
@@ -196,6 +199,9 @@ def adopt(product, run=None):
     run_id, run_dir = _latest_run(meta, run)
     if not run_id or not run_dir or not run_dir.exists():
         raise ValueError(f"运行不存在：{run_id or '<空>'}")
+    # 迁移旧运行时先把调研媒体本地化，确认台仍只需读 products/ 下的文件。
+    from shot_list import copy_benchmark_media
+    benchmark_media = copy_benchmark_media(run_dir, read_json(run_dir / "shots.json", {}) or {})
     evidence = []
     selected = _benchmark_selection(meta, run_dir)
     if (run_dir / "shots.json").exists() or _briefs(run_dir) or _final_takes(run_dir):
@@ -222,8 +228,16 @@ def adopt(product, run=None):
             row = checkpoints.resolve(row["id"], "approved",
                                       "依据已有下游产物补建：" + "、".join(names), "migration")
         adopted.append(row)
+    cover = benchmark_media["cover"]
+    if cover["status"] == "copied":
+        cover_note = "已复制对标封面"
+    elif cover["status"] == "existing":
+        cover_note = "已有对标封面本地副本"
+    else:
+        cover_note = f"未复制对标封面：{cover['reason']}"
     return {"product": product, "run": run_id, "adopted": adopted,
-            "message": f"已补建 {len(adopted)} 个迁移批准节点"}
+            "benchmark_media": benchmark_media,
+            "message": f"已补建 {len(adopted)} 个迁移批准节点；{cover_note}"}
 
 
 def status(product, run=None):

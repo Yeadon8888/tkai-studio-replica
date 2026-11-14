@@ -88,7 +88,7 @@ class ConsoleTests(unittest.TestCase):
 
     def test_reference_fallback_order(self):
         run = self.run
-        local = run / "benchmarks" / "C023.mp4"; local.parent.mkdir(); local.write_bytes(b"video")
+        local = run / "benchmark" / "video.mp4"; local.parent.mkdir(); local.write_bytes(b"video")
         brief = {"replication_reference": "https://cdn.test/ref.mp4"}
         shots = {"candidate_id": "C023", "aweme_id": "123", "reference_url": "https://tiktok.test/original"}
         with mock.patch.object(console, "_remote_video", return_value=True):
@@ -99,15 +99,15 @@ class ConsoleTests(unittest.TestCase):
             detail = console._reference_detail(run, brief, shots)
         self.assertEqual((detail["reference_source"], detail["reference_video"]),
                          ("remote", "https://cdn.test/ref.mp4"))
-        covers = run / "covers"; covers.mkdir(); (covers / "123.jpg").write_bytes(b"jpg")
+        cover = run / "benchmark" / "cover.jpg"; cover.write_bytes(b"jpg")
         with mock.patch.object(console, "_remote_video", return_value=False):
             detail = console._reference_detail(run, brief, shots)
         self.assertEqual(detail["reference_source"], "cover")
-        self.assertTrue(detail["reference_cover"].endswith("/covers/123.jpg"))
+        self.assertTrue(detail["reference_cover"].endswith("/benchmark/cover.jpg"))
         self.assertTrue(detail["reference_expired"])
         self.assertEqual(detail["reference_original"], "https://tiktok.test/original")
 
-    def test_reference_finds_legacy_research_batch_by_candidate(self):
+    def test_reference_does_not_serve_research_batch_outside_products(self):
         batch = self.home / "research" / "legacy-batch"
         (batch / "covers").mkdir(parents=True)
         (batch / "candidates.json").write_text(json.dumps([
@@ -117,8 +117,8 @@ class ConsoleTests(unittest.TestCase):
         shots = {"candidate_id": "C023", "aweme_id": "123"}
         with mock.patch.object(console, "_remote_video", return_value=False):
             detail = console._reference_detail(self.run, {}, shots)
-        self.assertEqual(detail["reference_source"], "cover")
-        self.assertIn("/research-media/legacy-batch/covers/123.jpg", detail["reference_cover"])
+        self.assertEqual(detail["reference_source"], "missing")
+        self.assertEqual(detail["reference_cover"], "")
 
     def test_resolve_rules_are_passed_through(self):
         code, _, body = self.request(f"/api/checkpoint/{self.cp['id']}/resolve",
@@ -150,6 +150,8 @@ class ConsoleTests(unittest.TestCase):
         secret = self.home / "secret.mp4"; secret.write_bytes(b"secret")
         code, _, body = self.request("/media/%2e%2e/secret.mp4")
         self.assertEqual(code, 403); self.assertNotIn(b"secret", body)
+        code, _, _ = self.request("/research-media/legacy-batch/covers/123.jpg")
+        self.assertEqual(code, 404)
 
     def test_server_factory_only_binds_loopback(self):
         class FakeServer:
