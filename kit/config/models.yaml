@@ -1,0 +1,349 @@
+catalog_version: 1
+verified_at: '2026-11-14'
+sources:
+  - references/video-models.md
+  - ~/.claude/skills/tokensfactory-media/references/models.md
+  - ~/.claude/skills/tokensfactory-media/references/api.md
+  - TokensFactory /v1/models（2026-11-14）
+
+x-text-unknown: &text_unknown
+  provider: tokensfactory
+  kind: text
+  reads_video: null
+  reads_audio: null
+  json_reliable: null
+  prices: null
+  policy: ask_first
+  verified: {date: '2026-11-14', basis: 仅确认账户模型列表中存在}
+  notes: 未实测多模态能力、JSON 稳定性和价格。
+x-image-unknown: &image_unknown
+  provider: tokensfactory
+  kind: image
+  prices: null
+  policy: ask_first
+  verified: {date: '2026-11-14', basis: 仅确认账户模型列表中存在}
+  notes: 未实测输入格式、能力和价格。
+x-video-unknown: &video_unknown
+  provider: tokensfactory
+  kind: video
+  durations: null
+  resolutions: null
+  aspects: null
+  images_min: null
+  images_max: null
+  audio_max: null
+  first_last: null
+  ref_video: null
+  seed: null
+  prices: null
+  policy: ask_first
+  verified: {date: '2026-11-14', basis: 仅确认账户模型列表中存在}
+  notes: 没有已核验的公开输入格式，不推测能力。
+
+models:
+  # 文本与理解
+  - <<: *text_unknown
+    id: gemini-3.8-flash
+    reads_video: false
+    reads_audio: null
+    json_reliable: null
+    policy: allowed
+    verified: {date: '2026-11-13', basis: 固定视频实测未摄取，token 判定失败}
+    notes: 会在没有读到视频时编造评审；禁止用于视频理解。声音能力未单独核验。
+  - <<: *text_unknown
+    id: gemini-3.8-flash-low
+    reads_video: true
+    reads_audio: true
+    json_reliable: null
+    policy: allowed
+    verified: {date: '2026-11-13', basis: 固定视频画面与声音实测通过}
+    notes: JSON 稳定性由 doctor 文本探针持续检查。
+  - <<: *text_unknown
+    id: gemini-3.6-flash
+  - <<: *text_unknown
+    id: gemini-3.7-flash
+  - <<: *text_unknown
+    id: gemini-4-argon
+  - <<: *text_unknown
+    id: gemini-4-argon-low
+  - <<: *text_unknown
+    id: gemini-4-carbon-low
+  - <<: *text_unknown
+    id: gemini-4-hydrogen
+  - <<: *text_unknown
+    id: gemini-4-hydrogen-low
+  - <<: *text_unknown
+    id: deepseek-v4.1-flash
+  - <<: *text_unknown
+    id: claude-fable-5-1
+  - <<: *text_unknown
+    id: claude-haiku-4-5-20251001
+  - <<: *text_unknown
+    id: claude-opus-4-8
+  - <<: *text_unknown
+    id: claude-opus-5-5
+  - <<: *text_unknown
+    id: claude-sonnet-5-5
+  - <<: *text_unknown
+    id: gpt-5.5
+  - <<: *text_unknown
+    id: gpt-5.6-sol
+  - <<: *text_unknown
+    id: gpt-5.6-terra
+  - <<: *text_unknown
+    id: gpt-6-astra
+  - <<: *text_unknown
+    id: gpt-6-sol
+
+  # TTS
+  - id: gemini-3.8-flash-tts
+    provider: tokensfactory
+    kind: tts
+    prices: {input_per_million_tokens: 1.60, output_per_million_tokens: 28.00}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: Kore/Puck 短句实测为 24kHz 单声道 WAV}
+    notes: 使用原生 generateContent 接口；不走 /v1/audio/speech。
+
+  # MiniMax H3：允许自动选择
+  - id: minimax-H3
+    provider: tokensfactory
+    kind: video
+    durations: [10, 15]
+    resolutions: [768p]
+    aspects: ['9:16', '16:9']
+    images_min: 1
+    images_max: 9
+    audio_max: 3
+    first_last: false
+    ref_video: false
+    seed: {min: 0, max: 2147483647}
+    prices: {per_second: {768p: 0.13}}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 固定 768p，不接参考视频。
+  - id: minimax-H3-fast
+    provider: tokensfactory
+    kind: video
+    durations: {min: 1, max: 15}
+    resolutions: [480p, 768p]
+    aspects: ['9:16', '16:9']
+    images_min: 1
+    images_max: 9
+    audio_max: 3
+    first_last: false
+    ref_video: false
+    seed: {min: 0, max: 2147483647}
+    prices: {per_second: {480p: 0.10, 768p: 0.13}}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 不支持 960p 或参考视频。
+  - id: minimax-H3-cinema
+    provider: tokensfactory
+    kind: video
+    durations: {min: 1, max: 15}
+    resolutions: [480p, 768p, 960p]
+    aspects: ['9:16', '16:9']
+    images_min: 1
+    images_max: 9
+    audio_max: 3
+    first_last: false
+    ref_video: false
+    seed: {min: 0, max: 2147483647}
+    prices: {per_second: {480p: 0.10, 768p: 0.13, 960p: 0.23}}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: H3 系列中唯一已核验支持 960p 的路线。
+  - id: minimax-H3-first-last
+    provider: tokensfactory
+    kind: video
+    durations: {min: 1, max: 15}
+    resolutions: [480p, 768p]
+    aspects: ['9:16', '16:9', '1:1']
+    images_min: 0
+    images_max: 0
+    audio_max: 0
+    first_last: true
+    ref_video: false
+    seed: {min: 1, max: 999999999999999}
+    prices: {per_second: {480p: 0.10, 768p: 0.13}}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: first_frame、last_frame 和 prompt 必填；不能传通用 images。
+  - id: minimax_h3_zm_titi
+    provider: tokensfactory
+    kind: video
+    durations: {min: 5, max: 25}
+    resolutions: [768p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 0
+    audio_max: 0
+    first_last: false
+    ref_video: true
+    seed: null
+    prices: {per_second: {768p: 0.25}}
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档与仓库既有路线}
+    notes: 单人物替换；ref_image 和 ref_video 必填；参考视频不得短于输出。
+  - <<: *video_unknown
+    id: minimax_h3_zm_titim
+    notes: 账户中存在，但无公开输入格式；必须先经人确认并补充文档。
+
+  # 其他视频：只在人已同意时选择
+  - id: wan2.2-motion
+    provider: tokensfactory
+    kind: video
+    durations: {min: 1, max: 30}
+    resolutions: ['464*832px(竖版)', '832*464px(横版)']
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 0
+    audio_max: 0
+    first_last: false
+    ref_video: true
+    seed: {min: 1, max: 999999999999999}
+    prices: null
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: ref_image 与最长 30 秒、32 MiB 的公开参考视频必填；价格未知。
+  - id: wan3
+    provider: tokensfactory
+    kind: video
+    durations: {min: 5, max: 30}
+    resolutions: [720p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 10
+    audio_max: 5
+    first_last: false
+    ref_video: true
+    seed: null
+    prices: {per_request: {default: 11.00}}
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 最多 5 个参考视频；有参考视频时输出不超过 15 秒。
+  - id: seedance2.0-933
+    provider: tokensfactory
+    kind: video
+    durations: [10, 15]
+    resolutions: [720p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 9
+    audio_max: 3
+    first_last: false
+    ref_video: true
+    seed: null
+    prices: null
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 最多 3 个参考视频；参考视频总时长与输出合计不超过 25 秒。
+  - id: seedance2.0-full
+    provider: tokensfactory
+    kind: video
+    durations: [10, 15]
+    resolutions: [720p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 9
+    audio_max: 3
+    first_last: false
+    ref_video: true
+    seed: null
+    prices: null
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 最多 3 个参考视频；参考视频总时长与输出合计不超过 25 秒。
+  - id: seedance2.5
+    provider: tokensfactory
+    kind: video
+    durations: {min: 5, max: 30}
+    resolutions: [720p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 30
+    audio_max: 10
+    first_last: false
+    ref_video: true
+    seed: null
+    prices: {per_second: {720p: 1.65}}
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 最多 10 个参考视频；1080p 回退已停用。
+  - id: muse-video
+    provider: tokensfactory
+    kind: video
+    durations: [10]
+    resolutions: [720p]
+    aspects: ['9:16', '16:9']
+    images_min: 0
+    images_max: 4
+    audio_max: 0
+    first_last: false
+    ref_video: false
+    seed: null
+    prices: {per_request: {default: 0.60}}
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory 公开接口文档}
+    notes: 文生视频或 1–4 张图片参考；不接参考视频和音频。
+  - <<: *video_unknown
+    id: grok-imagine-video-1.5-preview
+    durations: {min: 1, max: 15}
+    images_min: 0
+    images_max: 1
+    verified: {date: '2026-11-03', basis: 公开文档只确认 1–15 秒与单图用法}
+    notes: 分辨率、宽高比、价格和其他输入能力未核验。
+  - <<: *video_unknown
+    id: Seedance2.0Fast-guanghe
+  - <<: *video_unknown
+    id: Seedance2.0Mini-guanghe
+
+  # 图片
+  - <<: *image_unknown
+    id: gpt-image-2
+    policy: allowed
+    verified: {date: '2026-11-03', basis: TokensFactory 同步生成与文件编辑文档}
+    notes: 支持同步生成与 multipart 单文件编辑；具体能力和价格未完整核验。
+  - <<: *image_unknown
+    id: gpt-image-2-c
+  - <<: *image_unknown
+    id: gpt-image-2.5
+  - <<: *image_unknown
+    id: gpt-image-2.5-flare
+  - <<: *image_unknown
+    id: gpt-image-2.5-sunburst
+  - <<: *image_unknown
+    id: gpt-image-2.6
+  - <<: *image_unknown
+    id: gemini-3.1-flash-image-preview
+  - <<: *image_unknown
+    id: muse-image
+    prices: {per_request: {default: 0.20}}
+    verified: {date: '2026-11-03', basis: TokensFactory 同步生成与单文件编辑文档}
+    notes: 已核验 1:1 文生图与单图背景编辑；其余能力未知。
+
+  # 音乐接口不是自动选择项
+  - id: suno_music_open
+    provider: tokensfactory
+    kind: music
+    prices: null
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory Suno 接口文档}
+    notes: 付费异步创作；必须保存任务号并轮询，不自动重提。
+  - id: suno_uploads
+    provider: tokensfactory
+    kind: music
+    prices: {per_request: {default: 0.05}}
+    policy: ask_first
+    verified: {date: '2026-11-03', basis: TokensFactory Suno 上传接口文档}
+    notes: 这是参考音频导入而非生成或 TTS。
+
+  # 已退役：即使历史配置仍引用也不得选择
+  - {id: nano-banana-2, provider: tokensfactory, kind: image, prices: null, policy: retired, verified: {date: '2026-11-14', basis: 任务书指定退役}, notes: 不提交新请求。}
+  - {id: nano-banana-2.1, provider: tokensfactory, kind: image, prices: null, policy: retired, verified: {date: '2026-11-14', basis: 任务书指定 nano-banana-* 退役}, notes: 不提交新请求。}
+  - {id: nano-banana-pro, provider: tokensfactory, kind: image, prices: null, policy: retired, verified: {date: '2026-11-03', basis: 上游文档标记撤下}, notes: 不提交新请求。}
+  - {id: nano-banana-2_sync, provider: tokensfactory, kind: image, prices: null, policy: retired, verified: {date: '2026-11-03', basis: 上游文档标记撤下}, notes: 不提交新请求。}
+  - {id: nano-banana-pro_sync, provider: tokensfactory, kind: image, prices: null, policy: retired, verified: {date: '2026-11-03', basis: 上游文档标记撤下}, notes: 不提交新请求。}
+  - {id: veo-3-1, provider: tokensfactory, kind: video, durations: null, resolutions: null, aspects: null, images_min: null, images_max: null, audio_max: null, first_last: null, ref_video: null, seed: null, prices: null, policy: retired, verified: {date: '2026-11-03', basis: 上游路由不可用}, notes: 不提交新请求。}
+  - {id: veo-omni-flash, provider: tokensfactory, kind: video, durations: null, resolutions: null, aspects: null, images_min: null, images_max: null, audio_max: null, first_last: null, ref_video: null, seed: null, prices: null, policy: retired, verified: {date: '2026-11-03', basis: 上游路由不可用}, notes: 不提交新请求。}
+  - {id: seedance2.0-900, provider: tokensfactory, kind: video, durations: null, resolutions: null, aspects: null, images_min: null, images_max: null, audio_max: null, first_last: null, ref_video: null, seed: null, prices: null, policy: retired, verified: {date: '2026-11-14', basis: 任务书指定退役}, notes: 不提交新请求。}

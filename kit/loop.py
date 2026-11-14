@@ -41,6 +41,7 @@ import research  # noqa: E402
 import tt_research as tt  # noqa: E402
 
 import settings  # noqa: E402  模型、上限、路径都从 .env 读，见 settings.py
+import models  # noqa: E402
 
 GEN_MODEL = settings.video_route_model("default")  # 旧测试与外部引用兼容；实际生成按简报 video_route 选择
 GEMINI = settings.model("text")   # 兼容旧引用；各环节实际用 settings.model(role)
@@ -209,17 +210,17 @@ def _integer(value, field, low, high, allowed=None):
     return value
 
 
+def _whole(value, field):
+    """只校验整数形状；能力范围统一交给 models.check_request。"""
+    if isinstance(value, bool) or int(value) != float(value):
+        raise ValueError(f"{field} 必须是整数")
+    return int(value)
+
+
 def _resolution_label(resolution, aspect_ratio, square=True):
     """首尾帧/换人接口把方向编码在 resolution 中。"""
     base = settings.base_resolution(resolution)
-    if base not in ("480p", "768p"):
-        raise ValueError("resolution 必须是 480p 或 768p")
     if str(resolution) != base:
-        allowed = {base + "竖", base + "横"}
-        if square:
-            allowed.add(base + "(1:1)")
-        if str(resolution) not in allowed:
-            raise ValueError(f"resolution 不支持：{resolution}")
         return str(resolution)
     suffixes = {"9:16": "竖", "16:9": "横", "1:1": "(1:1)"}
     if aspect_ratio not in suffixes or (aspect_ratio == "1:1" and not square):
@@ -227,7 +228,7 @@ def _resolution_label(resolution, aspect_ratio, square=True):
     return base + suffixes[aspect_ratio]
 
 
-def build_video_request(brief):
+def _build_video_request_fixed(brief):
     """按用途组装并本地校验 TokensFactory 请求；任何异常都发生在付费提交前。"""
     route = str(brief.get("video_route") or "default")
     model = settings.video_route_model(route)
@@ -236,43 +237,33 @@ def build_video_request(brief):
     aspect = str(brief.get("aspect_ratio") or settings.get("VIDEO_ASPECT"))
 
     if route in ("default", "quality", "fast"):
-        duration = _integer(brief.get("duration", settings.get_float("VIDEO_DURATION")), "duration", 1, 15,
-                            {10, 15} if route == "default" else None)
-        allowed_resolutions = {"768p"} if route == "default" else ({"480p", "768p", "960p"} if route == "quality" else {"480p", "768p"})
-        if resolution not in allowed_resolutions:
-            raise ValueError(f"{route} 路线不支持分辨率 {resolution}")
-        if aspect not in ("9:16", "16:9"):
-            raise ValueError(f"{route} 路线 aspect_ratio 只能是 9:16 或 16:9")
+        duration = _whole(brief.get("duration", settings.get_float("VIDEO_DURATION")), "duration")
         images = brief.get("images") or []
         audios = brief.get("audio_urls") or []
-        if not 1 <= len(images) <= 9:
-            raise ValueError("images 必须有 1–9 张")
-        if len(audios) > 3:
-            raise ValueError("audio_urls 最多 3 条")
         if not prompt:
             raise ValueError("prompt 不能为空")
         body = {"model": model, "prompt": prompt,
                 "images": [_image_input(x, f"images[{i}]") for i, x in enumerate(images)],
                 "duration": duration, "resolution": resolution, "aspect_ratio": aspect}
         if brief.get("seed") is not None:
-            body["seed"] = _integer(brief["seed"], "seed", 0, 2_147_483_647)
+            body["seed"] = _whole(brief["seed"], "seed")
         if audios:
             body["audio_urls"] = [_audio_input(x, f"audio_urls[{i}]") for i, x in enumerate(audios)]
         return route, body
 
     if route == "keyframe":
-        duration = _integer(brief.get("duration", 5), "duration", 1, 15)
+        duration = _whole(brief.get("duration", 5), "duration")
         if not prompt:
             raise ValueError("prompt 不能为空")
         body = {"model": model, "first_frame": _image_input(brief.get("first_frame"), "first_frame"),
                 "last_frame": _image_input(brief.get("last_frame"), "last_frame"), "prompt": prompt,
                 "duration": duration, "resolution": _resolution_label(resolution, aspect)}
         if brief.get("seed") is not None:
-            body["seed"] = _integer(brief["seed"], "seed", 1, 2_147_483_647)
+            body["seed"] = _whole(brief["seed"], "seed")
         return route, body
 
     if route == "replace_person":
-        duration = _integer(brief.get("duration", 10), "duration", 5, 25)
+        duration = _whole(brief.get("duration", 10), "duration")
         ref_duration = brief.get("ref_video_duration")
         if ref_duration is None or float(ref_duration) <= 0:
             raise ValueError("replace_person 必须提供已核验的 ref_video_duration")
@@ -283,8 +274,6 @@ def build_video_request(brief):
         if str(brief.get("tier") or "").upper() != "H" or brief.get("reference_has_person") is not True \
                 or brief.get("product_in_frame_not_important") is not True:
             raise ValueError("replace_person 只用于 H 档、参考视频有人物且简报明确产品在画面里不重要")
-        if settings.base_resolution(resolution) != "768p":
-            raise ValueError("replace_person 路线只支持 768p")
         body = {"model": model, "ref_image": _image_input(brief.get("ref_image"), "ref_image"),
                 "ref_video": _public_url(brief.get("ref_video"), "ref_video"), "duration": duration,
                 "resolution": _resolution_label(resolution, aspect, square=False)}
@@ -294,13 +283,83 @@ def build_video_request(brief):
 
     if route == "motion":
         motion_resolution = brief.get("resolution") or "464*832px(竖版)"
-        if motion_resolution not in ("464*832px(竖版)", "832*464px(横版)"):
-            raise ValueError(f"motion 路线不支持分辨率 {motion_resolution}")
         body = {"model": model, "ref_image": _image_input(brief.get("ref_image"), "ref_image"),
                 "ref_video": _public_url(brief.get("ref_video"), "ref_video"),
                 "resolution": motion_resolution}
         return route, body
     raise ValueError(f"未知 video_route：{route}")
+
+
+def _build_video_request_auto(brief):
+    """按简报需求选模型；只组装目录已核验的 MiniMax H3 输入形状。"""
+    prompt = str(brief.get("prompt") or "").strip()
+    resolution = str(brief.get("resolution") or settings.get("VIDEO_RESOLUTION"))
+    aspect = str(brief.get("aspect_ratio") or settings.get("VIDEO_ASPECT"))
+    images = brief.get("images") or []
+    audios = brief.get("audio_urls") or []
+    first_last = bool(brief.get("first_frame") or brief.get("last_frame"))
+    ref_video = bool(brief.get("ref_video"))
+    need = {
+        "duration": brief.get("duration", settings.get_float("VIDEO_DURATION")),
+        "resolution": resolution,
+        "aspect_ratio": aspect,
+        "images": len(images),
+        "audio_urls": len(audios),
+        "first_last": first_last,
+        "ref_video": ref_video,
+        "allow_ask_first": brief.get("allow_ask_first") is True,
+    }
+    if brief.get("seed") is not None:
+        need["seed"] = brief["seed"]
+    # 简报 model 与 .env 的旧 MODEL_VIDEO 都属于人工显式指定：优先使用，不满足就报错。
+    explicit = brief.get("model") or settings.explicit_value("MODEL_VIDEO")
+    if explicit:
+        need["model"] = explicit
+    chosen = models.select("video", need)
+    model = chosen["model"]
+    contract = models.get(model)
+    duration = brief.get("duration", settings.get_float("VIDEO_DURATION"))
+
+    if contract.get("first_last") is True:
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        body = {"model": model,
+                "first_frame": _image_input(brief.get("first_frame"), "first_frame"),
+                "last_frame": _image_input(brief.get("last_frame"), "last_frame"),
+                "prompt": prompt, "duration": int(duration),
+                "resolution": _resolution_label(resolution, aspect)}
+    elif contract.get("ref_video") is True and contract.get("images_max") == 0:
+        ref_duration = brief.get("ref_video_duration")
+        if ref_duration is None or float(duration) > float(ref_duration):
+            raise ValueError("换人模型要求 ref_video_duration，且输出不能超过参考视频")
+        body = {"model": model, "ref_image": _image_input(brief.get("ref_image"), "ref_image"),
+                "ref_video": _public_url(brief.get("ref_video"), "ref_video"),
+                "duration": int(duration), "resolution": _resolution_label(resolution, aspect, square=False)}
+        if prompt:
+            body["prompt"] = prompt
+    else:
+        if contract.get("first_last") is not False or contract.get("ref_video") is not False:
+            raise ValueError(f"auto 已选出 {model}，但该模型输入形状尚未接入 build_video_request")
+        if not prompt:
+            raise ValueError("prompt 不能为空")
+        body = {"model": model, "prompt": prompt,
+                "images": [_image_input(x, f"images[{i}]") for i, x in enumerate(images)],
+                "duration": int(duration), "resolution": resolution, "aspect_ratio": aspect}
+        if audios:
+            body["audio_urls"] = [_audio_input(x, f"audio_urls[{i}]") for i, x in enumerate(audios)]
+    if brief.get("seed") is not None:
+        body["seed"] = int(brief["seed"])
+    return "auto", body
+
+
+def build_video_request(brief):
+    """组装视频请求，并以 models.yaml 作为能力限制的唯一来源。"""
+    if str(brief.get("video_route") or "default") == "auto":
+        route, body = _build_video_request_auto(brief)
+    else:
+        route, body = _build_video_request_fixed(brief)
+    models.check_request(body["model"], body)
+    return route, body
 
 
 def _registered_product(project):

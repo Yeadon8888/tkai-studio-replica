@@ -44,6 +44,10 @@ DEFAULTS = {
     "MODEL_SCRIPT": "",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
+    "MODEL_TTS": "gemini-3.8-flash-tts",
+    "MODEL_VIDEO_READ_PROBE": "gemini-3.8-flash,gemini-3.8-flash-low",
+    # 自动选模白名单；留空 = models.yaml 中全部 policy=allowed 的模型。
+    "MODELS_ALLOWED": "",
     # 视频用途路线。MODEL_VIDEO 只作旧配置兼容；默认路线优先读 VIDEO_ROUTE_DEFAULT。
     "VIDEO_ROUTE_DEFAULT": "minimax-H3",
     "VIDEO_ROUTE_QUALITY": "minimax-H3-cinema",
@@ -52,13 +56,7 @@ DEFAULTS = {
     "VIDEO_ROUTE_REPLACE_PERSON": "minimax_h3_zm_titi",
     "VIDEO_ROUTE_MOTION": "wan2.2-motion",
     # 已确认的人民币元/请求秒。没有确认价格的模型不写，账本记为未知。
-    "VIDEO_PRICES": json.dumps({
-        "minimax-H3": {"768p": 0.13},
-        "minimax-H3-cinema": {"480p": 0.10, "768p": 0.13, "960p": 0.23},
-        "minimax-H3-fast": {"480p": 0.10, "768p": 0.13},
-        "minimax-H3-first-last": {"480p": 0.10, "768p": 0.13},
-        "minimax_h3_zm_titi": {"768p": 0.25},
-    }, separators=(",", ":")),
+    "VIDEO_PRICES": "",  # 仅作 .env 兼容；未显式配置时从 kit/config/models.yaml 读取
     # 视频参数与旧价格配置
     "VIDEO_PRICE_CNY_PER_SECOND": "0.13",
     "IMAGE_PRICE_CNY": "",
@@ -141,6 +139,13 @@ def get(name):
     return load()[name]
 
 
+def explicit_value(name):
+    """只返回进程环境或 .env 明确写出的非空值，不返回代码默认值。"""
+    if os.environ.get(name):
+        return os.environ[name]
+    return parse_env_file(env_path()).get(name) or None
+
+
 def get_int(name):
     return int(float(get(name)))
 
@@ -151,7 +156,7 @@ def get_float(name):
 
 def model(role="text"):
     """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/script/video/image/text。"""
-    if role in ("video", "image"):
+    if role in ("video", "image", "tts"):
         return get(f"MODEL_{role.upper()}")
     return get(f"MODEL_{role.upper()}") if role in TEXT_ROLES and get(f"MODEL_{role.upper()}") else get("MODEL_TEXT")
 
@@ -172,9 +177,20 @@ def video_route_model(route="default"):
 
 
 def video_prices():
-    """返回模型 → 基础分辨率 → 元/秒；空项表示价格未知。"""
+    """返回模型 → 基础分辨率 → 元/秒；显式 VIDEO_PRICES 优先，否则读模型目录。"""
+    file_vals = parse_env_file(env_path())
+    explicit = os.environ.get("VIDEO_PRICES") or file_vals.get("VIDEO_PRICES")
+    if not explicit:
+        # 延迟导入，避免 settings 与 models 的模块初始化循环。
+        import models
+        out = {}
+        for item in models.load():
+            per_second = (item.get("prices") or {}).get("per_second")
+            if per_second:
+                out[item["id"]] = per_second
+        return out
     try:
-        value = json.loads(get("VIDEO_PRICES"))
+        value = json.loads(explicit)
     except (TypeError, ValueError) as exc:
         raise ValueError("VIDEO_PRICES 必须是 JSON 对象") from exc
     if not isinstance(value, dict):
