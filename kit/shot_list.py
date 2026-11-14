@@ -13,19 +13,48 @@ import loop  # noqa: E402
 import tt_research as tt  # noqa: E402
 
 
-PROMPT = """你是短视频导演。完整观看并听完给出的对标视频，按真实切镜和叙事节拍输出镜头表。
-每个镜头尽量为 3–6 秒；起止时间必须首尾相接、覆盖整条视频，不得有空隙或重叠。
+PROMPT = """你是短视频导演。完整观看并听完给出的对标视频，先判断整条叙事结构，再按真实切镜输出镜头表，最后判断哪些内容保留、哪些重做。
+不要为了控制时长拆镜；只有画面实际切镜才新建镜头。起止时间必须首尾相接、覆盖整条视频，不得有空隙或重叠。
 只依据画面和声音，看不清或听不清就写空字符串，不要编造。
 只输出一个 JSON 对象：
-{"duration": 18.2, "summary": "为什么整条视频抓人", "shots": [
+{"duration": 18.2, "summary": "为什么整条视频抓人", "structure": [
+ {"beat":"钩子|证明|行动或其他叙事节拍","start":0.0,"end":4.2}], "shots": [
  {"id":"S01","start":0.0,"end":4.2,"scale":"景别","camera":"机位与运动",
   "action":"动作","product_role":"subject|supporting|none","hand_action":true,
   "onscreen_text":"原画面文字","voiceover":"口播原文","music_sfx":"音乐与音效",
-  "rhythm":"节奏点","hook_reason":"为什么抓人"}]}
+  "rhythm":"节奏点","hook_reason":"为什么抓人","join":"cut|continuous|match_cut",
+  "keep":"keep|redo","redo_reason":"redo 时说明不适配原因，否则空字符串",
+  "end_state":"结束瞬间手、产品、道具的位置和状态"}]}
+第一个镜头的 join 必须是 cut。continuous 只用于同一连续镜头被时间边界分段、画面本身没有切镜；match_cut 是动作匹配切。
 """
 
 REQUIRED = ("id", "start", "end", "scale", "camera", "action", "onscreen_text",
-            "voiceover", "music_sfx", "rhythm", "hook_reason")
+            "voiceover", "music_sfx", "rhythm", "hook_reason", "join", "keep",
+            "redo_reason", "end_state")
+JOINS = ("cut", "continuous", "match_cut")
+KEEP = ("keep", "redo")
+
+
+def _validate_timeline(rows, duration, label, name_key):
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"{label} 必须是非空列表")
+    cursor = 0.0
+    normalized = []
+    for index, raw in enumerate(rows, 1):
+        if not isinstance(raw, dict) or name_key not in raw:
+            raise ValueError(f"第 {index} 个{label}缺少 {name_key}")
+        try:
+            start, end = float(raw["start"]), float(raw["end"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"第 {index} 个{label}时间不是数字") from exc
+        if end <= start or abs(start - cursor) > 0.08:
+            raise ValueError(f"第 {index} 个{label}时间轴不连续")
+        normalized.append(dict(raw, start=round(cursor, 3), end=round(end, 3)))
+        cursor = end
+    if abs(cursor - duration) > 0.08:
+        raise ValueError(f"{label}结尾 {cursor:g} 与视频时长 {duration:g} 不一致")
+    normalized[-1]["end"] = round(duration, 3)
+    return normalized
 
 
 def validate(data, tolerance=0.08):
@@ -38,6 +67,7 @@ def validate(data, tolerance=0.08):
         raise ValueError("duration 必须是正数") from exc
     if duration <= 0:
         raise ValueError("duration 必须是正数")
+    structure = _validate_timeline(data.get("structure"), duration, "structure", "beat")
     shots, cursor = [], 0.0
     for index, raw in enumerate(data["shots"], 1):
         if not isinstance(raw, dict):
@@ -55,6 +85,16 @@ def validate(data, tolerance=0.08):
             kind = "空隙" if start > cursor else "重叠"
             raise ValueError(f"第 {index} 个镜头与上一镜头有{kind}：{cursor:g} → {start:g}")
         row = dict(raw, id=f"S{index:02d}", start=round(cursor, 3), end=round(end, 3))
+        if row["join"] not in JOINS:
+            raise ValueError(f"第 {index} 个镜头 join 非法：{row['join']}")
+        if index == 1 and row["join"] != "cut":
+            raise ValueError("第一个镜头 join 必须是 cut")
+        if row["keep"] not in KEEP:
+            raise ValueError(f"第 {index} 个镜头 keep 非法：{row['keep']}")
+        if row["keep"] == "redo" and not str(row["redo_reason"]).strip():
+            raise ValueError(f"第 {index} 个镜头 redo 时必须填写 redo_reason")
+        if not str(row["end_state"]).strip():
+            raise ValueError(f"第 {index} 个镜头 end_state 不能为空")
         row["product_role"] = row.get("product_role") if row.get("product_role") in ("subject", "supporting", "none") else "none"
         row["hand_action"] = bool(row.get("hand_action"))
         shots.append(row)
@@ -62,7 +102,7 @@ def validate(data, tolerance=0.08):
     if abs(cursor - duration) > tolerance:
         raise ValueError(f"镜头表结尾 {cursor:g} 与视频时长 {duration:g} 不一致")
     shots[-1]["end"] = round(duration, 3)
-    return {**data, "duration": round(duration, 3), "shots": shots}
+    return {**data, "duration": round(duration, 3), "structure": structure, "shots": shots}
 
 
 def candidate_source(batch, candidate_id, reachable=tt.media_reachable):
@@ -92,6 +132,8 @@ def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.med
     result = validate(parsed)
     result.update(candidate_id=candidate_id, aweme_id=candidate.get("aweme_id"),
                   reference_url=candidate.get("url") or source, source_video_url=source)
+    result.update(research_batch=str(batch.resolve()), reference_author=candidate.get("author") or "",
+                  reference_title=candidate.get("title") or candidate.get("desc") or "")
     write_json(project / "shots.json", result)
     return result
 

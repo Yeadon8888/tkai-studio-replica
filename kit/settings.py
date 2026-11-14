@@ -41,6 +41,7 @@ DEFAULTS = {
     "MODEL_CRITIC": "",
     "MODEL_REVIEW": "",
     "MODEL_REVISE": "",
+    "MODEL_SCRIPT": "",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
     # 视频用途路线。MODEL_VIDEO 只作旧配置兼容；默认路线优先读 VIDEO_ROUTE_DEFAULT。
@@ -79,7 +80,7 @@ DEFAULTS = {
     "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
-TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise")
+TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script")
 
 _cache = None
 
@@ -148,7 +149,7 @@ def get_float(name):
 
 
 def model(role="text"):
-    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/video/image/text。"""
+    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/script/video/image/text。"""
     if role in ("video", "image"):
         return get(f"MODEL_{role.upper()}")
     return get(f"MODEL_{role.upper()}") if role in TEXT_ROLES and get(f"MODEL_{role.upper()}") else get("MODEL_TEXT")

@@ -20,19 +20,19 @@ import shot_plan  # noqa: E402
 
 def shots():
     return {"duration": 12, "candidate_id": "C023", "source_video_url": "https://example.test/ref.mp4",
-            "summary": "结果悬念推动观看", "shots": [
+            "summary": "结果悬念推动观看", "structure": [{"beat": "证明", "start": 0, "end": 12}], "shots": [
         {"id": "S01", "start": 0, "end": 4, "scale": "近景", "camera": "第一人称俯拍",
          "action": "拿起试纸瓶", "product_role": "subject", "hand_action": False,
          "onscreen_text": "old", "voiceover": "source line", "music_sfx": "beat", "rhythm": "开场",
-         "hook_reason": "先给结果"},
+         "hook_reason": "先给结果", "join": "cut", "keep": "keep", "redo_reason": "", "end_state": "手持瓶"},
         {"id": "S02", "start": 4, "end": 8, "scale": "特写", "camera": "固定俯拍",
          "action": "手把试纸浸入水中", "product_role": "supporting", "hand_action": True,
          "onscreen_text": "", "voiceover": "source line 2", "music_sfx": "dip", "rhythm": "动作",
-         "hook_reason": "验证"},
+         "hook_reason": "验证", "join": "continuous", "keep": "keep", "redo_reason": "", "end_state": "试纸在水中"},
         {"id": "S03", "start": 8, "end": 12, "scale": "特写", "camera": "轻微推进",
          "action": "把试纸放到色卡旁比对", "product_role": "subject", "hand_action": True,
          "onscreen_text": "", "voiceover": "source line 3", "music_sfx": "hit", "rhythm": "揭晓",
-         "hook_reason": "结果"},
+         "hook_reason": "结果", "join": "cut", "keep": "keep", "redo_reason": "", "end_state": "试纸在色卡旁"},
     ]}
 
 
@@ -50,36 +50,31 @@ class ShotListValidation(unittest.TestCase):
 
 
 class ShotPlanRoutes(unittest.TestCase):
-    def test_selects_keyframe_and_quality_without_asking_video_model_for_text(self):
+    def test_groups_continuous_shots_and_uses_scene_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            refs = [root / f"r{i}.jpg" for i in range(3)]
+            refs = [root / f"r{i}.jpg" for i in range(2)]
             for path in refs:
                 path.write_bytes(b"image")
-            frame = root / "frame.png"
-            frame.write_bytes(b"frame")
-            plan = shot_plan.make_plan(shots(), refs, ["16 parameters", "125 strips", "compare after dipping"],
-                                       keyframes={"S01": str(frame), "S03": str(frame)})
-        self.assertEqual([s["video_route"] for s in plan["segments"]], ["keyframe", "quality", "keyframe"])
-        self.assertEqual(len(plan["segments"][1]["images"]), 3)
+            scene = root / "scene.png"
+            scene.write_bytes(b"scene")
+            script = {"scene": "A clean table", "shots": [
+                {"id": f"S0{i}", "visual_prompt": "A hand moves the product", "voiceover": "Safe line",
+                 "caption": "Safe line", "onscreen_copy": "", "end_state": "product held"}
+                for i in range(1, 4)]}
+            plan = shot_plan.make_plan(shots(), script, refs, scene_path=scene, seed=9)
+        self.assertEqual([s["shot_ids"] for s in plan["segments"]], [["S01", "S02"], ["S03"]])
+        self.assertEqual(plan["segments"][0]["images"][0], str(scene.resolve()))
         for segment in plan["segments"]:
-            self.assertIn("do not add text", segment["prompt"].lower())
-            self.assertNotIn("source line", segment["voiceover_line"])
+            self.assertIn("do not render captions", segment["prompt"].lower())
+            self.assertEqual(segment["seed"], 9)
 
-    def test_rejects_segment_outside_three_to_six_seconds(self):
+    def test_single_long_shot_is_evenly_split_under_fifteen(self):
         data = shots()
-        data["shots"][0]["end"] = 2.9
-        with self.assertRaisesRegex(ValueError, "3–6"):
-            shot_plan.validate_durations(data["shots"])
-
-    def test_continuous_eighteen_second_shot_becomes_four_action_beats(self):
-        data = shots()
-        long_shot = dict(data["shots"][0], start=0, end=18.2)
-        beats = shot_plan.expand_beats([long_shot])
-        self.assertEqual(len(beats), 4)
-        self.assertTrue(all(3 <= shot_plan._duration(row) <= 6 for row in beats))
-        self.assertEqual([row["keyframe_preferred"] for row in beats], [True, False, False, True])
-        self.assertIn("Dip one test strip", beats[1]["action"])
+        long_shot = dict(data["shots"][0], start=0, end=31)
+        chunks = shot_plan.split_group([long_shot])
+        self.assertEqual(len(chunks), 3)
+        self.assertTrue(all(sum(x["duration"] for x in chunk) <= 15 for chunk in chunks))
 
 
 class ComposeTimeline(unittest.TestCase):
@@ -111,7 +106,10 @@ class ComposeTimeline(unittest.TestCase):
                 (project / name).mkdir()
             brief = project / "briefs" / "take.json"
             brief.write_text(json.dumps({"id": "take", "segments": [
-                {"duration": 3, "caption": "line", "onscreen_copy": "copy"}
+                {"duration": 3, "shot_id": "S01", "caption": "line", "onscreen_copy": "copy"}
+            ]}), encoding="utf-8")
+            (project / "script.json").write_text(json.dumps({"scene": "table", "shots": [
+                {"id": "S01", "voiceover": "line", "caption": "line", "onscreen_copy": "copy"}
             ]}), encoding="utf-8")
             (project / "takes" / "take.mp4").write_bytes(b"raw")
             (project / "jobs" / "take.json").write_text("{}", encoding="utf-8")

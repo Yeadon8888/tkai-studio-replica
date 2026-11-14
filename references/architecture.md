@@ -34,7 +34,7 @@
 | 起草（H/M/L） | `draft_prompt.py` | 模型（`MODEL_DRAFT`）判断适配并改写；代码查硬约束 | 简报的 `prompt`、`draft_fit` |
 | 自写（X） | `own_script.py` | 代码自检 | 脚本与简报；`prompt_review.py` 是实验功能，不在主流程 |
 | 生成 | `loop.py gen` | 代码查预算与在途任务 | `takes/<id>.mp4`、`jobs/<id>.json` |
-| 高质量复刻 | `shot_list.py`、`shot_plan.py`、`compose.py` | 模型拆镜；代码选路线与校验时间轴；Hypit 合成 | `shots.json`、多段简报、带口播字幕的成片 |
+| 高质量复刻 | `shot_list.py`、`script_writer.py`、`keyframe.py`、`shot_plan.py`、`compose.py` | 模型按真实切镜拆解；配置脚本模型写文案；代码阻塞校验、连续性分组与接力；Hypit 合成 | `shots.json`、`script.json`、`scene.png`、连续性计划、带口播字幕的成片 |
 | 审判 | `review_panel.py`、`gate.py` | 代码做机器检查；模型（`MODEL_REVIEW`）按清单判；代码合并与裁决 | `reviews/<id>.json`、判定 |
 | 修订 | `refine_loop.py` | 模型（`MODEL_REVISE`）改提示词；代码查硬约束、预算、轮数 | `refine/<id>.jsonl`、下一轮简报 |
 | 看板 | `loop.py assemble`、`board`、`production.py` | 代码：按提示词系列归组、分级、算废片率与成品单价 | `board.html`（每组显示当前成片，过往废片可展开） |
@@ -61,5 +61,5 @@
 - 本地文件的拆解只看抽帧，听不到口播。
 - 专家只看抽帧，听不到声音。有口播的视频，口播一项会标"需人工听"。
 - 语音转写的模型还没有确认，台词时间只能靠视频理解模型读出，精度有限。
-- 拆解问卷仍是七个维度的固定问卷，还没有改成"先整体、再逐段、最后分保留与重做"的读法。
+- 通用调研拆解仍是七个维度问卷；逐镜头复刻已经按“整体结构 → 真实切镜 → 保留/重做”读取，长镜头分组与接力见 `long-take.md`。
 - 旧 `projects/` 和外部 `research/` 数据不会迁移或删除；已有运行仍可直接传给看板等只读命令。

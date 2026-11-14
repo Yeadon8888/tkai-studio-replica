@@ -254,6 +254,8 @@ def build_video_request(brief):
         body = {"model": model, "prompt": prompt,
                 "images": [_image_input(x, f"images[{i}]") for i, x in enumerate(images)],
                 "duration": duration, "resolution": resolution, "aspect_ratio": aspect}
+        if brief.get("seed") is not None:
+            body["seed"] = _integer(brief["seed"], "seed", 0, 2_147_483_647)
         if audios:
             body["audio_urls"] = [_audio_input(x, f"audio_urls[{i}]") for i, x in enumerate(audios)]
         return route, body
@@ -265,6 +267,8 @@ def build_video_request(brief):
         body = {"model": model, "first_frame": _image_input(brief.get("first_frame"), "first_frame"),
                 "last_frame": _image_input(brief.get("last_frame"), "last_frame"), "prompt": prompt,
                 "duration": duration, "resolution": _resolution_label(resolution, aspect)}
+        if brief.get("seed") is not None:
+            body["seed"] = _integer(brief["seed"], "seed", 1, 2_147_483_647)
         return route, body
 
     if route == "replace_person":
@@ -396,6 +400,8 @@ def _generate_single(a):
         job = {"id": tid, "task_id": task_id, "model": model, "video_route": route,
                "resolution": resolution, "status": "submitted", "submitted_at": _now(),
                "route_notice": brief.get("route_notice"), "request": _safe_request(body)}
+        if brief.get("chain_source"):
+            job["chain_source"] = brief["chain_source"]
         _write(job_path, job)
         ledger.append("tokensfactory", model, "submitted", project=project.name, ref=tid, units=duration,
                       kind="video", resolution=resolution)
@@ -549,6 +555,19 @@ def concat_segments(videos, output):
         raise
 
 
+def extract_last_frame(video, output):
+    """从已落盘视频尾部取一帧；使用 -sseof 避免依赖远程地址。"""
+    video, output = Path(video), Path(output)
+    if not video.is_file():
+        raise FileNotFoundError(video)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-0.08", "-i", str(video),
+                    "-frames:v", "1", str(output)], check=True)
+    if not output.is_file():
+        raise RuntimeError("ffmpeg 没有产出接力首帧")
+    return output
+
+
 def cmd_gen(a):
     project = Path(a.project)
     brief = _read(a.brief)
@@ -571,6 +590,33 @@ def cmd_gen(a):
         out = project / "takes" / f"{sid}.mp4"
         child_path = project / "briefs" / f"{sid}.json"
         child_brief = _segment_brief(brief, segment, sid)
+        if segment.get("first_frame") == "chain:prev":
+            previous = segment_videos[-1] if segment_videos else None
+            if previous is None or not Path(previous).is_file():
+                reason = "上一段未成功落盘，接力段未提交"
+                _write(project / "jobs" / f"{sid}.json",
+                       {"id": sid, "status": "blocked", "reason": reason, "saved_at": _now()})
+                print(f"{sid} {reason}")
+                return
+            first = project / "chain" / f"{sid}-first.png"
+            try:
+                extract_last_frame(previous, first)
+                import keyframe
+                last = keyframe.generate_chain_last_frame(
+                    project, sid, first, segment.get("end_state"), segment.get("aspect_ratio"))
+            except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+                reason = f"接力帧生成失败 {type(exc).__name__}，本段未提交"
+                _write(project / "jobs" / f"{sid}.json",
+                       {"id": sid, "status": "blocked", "reason": reason,
+                        "chain_source": {"previous_video": str(previous), "first_frame": str(first)},
+                        "saved_at": _now()})
+                print(f"{sid} {reason}")
+                return
+            child_brief["first_frame"] = str(first.resolve())
+            child_brief["last_frame"] = str(last)
+            child_brief["chain_source"] = {"previous_video": str(previous),
+                                             "first_frame": str(first.resolve()),
+                                             "last_frame": str(last)}
         _write(child_path, child_brief)
         reuse_from = segment.get("reuse_from")
         if reuse_from and not out.exists():
@@ -598,6 +644,11 @@ def cmd_gen(a):
             _generate_single(child_args)
         if not out.exists():
             print(f"{sid} 未生成成功，停止且不拼接；已成功的视频段保留")
+            if index < len(segments) and segments[index].get("first_frame") == "chain:prev":
+                blocked_id = f"{tid}-s{index + 1}"
+                _write(project / "jobs" / f"{blocked_id}.json",
+                       {"id": blocked_id, "status": "blocked",
+                        "reason": f"上一段 {sid} 未成功落盘，接力段未提交", "saved_at": _now()})
             return
         if not getattr(a, "no_review", False) and not (project / "reviews" / f"{sid}.json").exists():
             import review_panel
