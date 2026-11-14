@@ -50,7 +50,7 @@ def create(pid, name, budget_cny=DEFAULT_BUDGET_CNY, anchor=""):
         raise SystemExit(f"品 {pid} 已存在")
     meta = {"product_id": pid, "name": name, "anchor": anchor, "budget_cny": budget_cny,
             "approved_budget_cny": None, "budget_note": "", "selected_benchmarks": [],
-            "runs": [], "created": _now()}
+            "reference_images": [], "runs": [], "created": _now()}
     write_json(d / "product_state.json", meta)
     _queue_set(pid, stage="scope", status="active", note="新建")
     return meta
@@ -104,6 +104,22 @@ def select_benchmarks(pid, ids, batch=None):
     write_json(product_dir(pid) / "product_state.json", meta)
     _queue_set(pid, note=f"已选对标 {len(cur)} 条")
     return cur
+
+
+def register_references(pid, files):
+    """在产品卡登记真实产品参考图；流程只使用此清单，不扫描目录猜测。"""
+    meta = load(pid)
+    refs = []
+    for value in files:
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            raise SystemExit(f"产品参考图不存在：{path}")
+        refs.append(str(path))
+    if not refs:
+        raise SystemExit("至少登记一张产品参考图")
+    meta["reference_images"] = refs
+    write_json(product_dir(pid) / "product_state.json", meta)
+    return refs
 
 
 def limit_cny(meta):
@@ -183,6 +199,9 @@ def main(argv=None):
     sb.add_argument("--product", required=True)
     sb.add_argument("--ids", required=True)
     sb.add_argument("--batch", help="调研批次目录名，便于追溯")
+    refs = sub.add_parser("register-references", help="登记产品参考图清单")
+    refs.add_argument("--product", required=True)
+    refs.add_argument("--files", nargs="+", required=True)
     q = sub.add_parser("queue")
     q.add_argument("--set-stage", nargs=2, metavar=("PRODUCT", "STAGE"))
     a = ap.parse_args(argv)
@@ -200,6 +219,9 @@ def main(argv=None):
         ids = [x.strip() for x in a.ids.split(",") if x.strip()]
         cur = select_benchmarks(a.product, ids, a.batch)
         print("已选对标：", ", ".join(x["id"] for x in cur))
+    elif a.cmd == "register-references":
+        values = register_references(a.product, a.files)
+        print("已登记产品参考图", len(values), "张")
     elif a.cmd == "register-run":
         register_run(a.product, a.run)
         print("已登记运行", a.run)

@@ -12,6 +12,8 @@ python3 studio.py approve <节点id> [--note "<说明>"] [--by <名字>]
 python3 studio.py reject <节点id> --note "<原因>" [--by <名字>]
 python3 studio.py changes <节点id> --note "<修改要求>" [--by <名字>]
 python3 studio.py edit-script <节点id> --segment 2 --field voiceover --value "..." [--by <名字>]
+python3 studio.py adopt --product <品> --run <运行>
+python3 studio.py console [--port 8765]
 python3 studio.py --json status --product <品>
 ```
 
@@ -20,6 +22,8 @@ python3 studio.py --json status --product <品>
 - `--json` 放在子命令前，输出给平台或其它 Agent 使用的结构化结果。
 - 每次最多执行一个付费步骤；批准后仍会检查批准额度和品剩余预算。
 - 脚本编辑只在重新通过代码校验后写入，修改前后内容进入审计日志。
+- `console` 只监听 `127.0.0.1`，页面与媒体不对局域网或公网开放。人工确认优先使用确认台。
+- `adopt` 只接管已有下游产物的旧运行，补建迁移批准审计，不执行任何生成或评审。
 
 ## 体检（`doctor.py`）
 
@@ -37,11 +41,14 @@ python3 products.py status --product <品id>                 # 预算与已花�
 python3 products.py approve-budget --product <品id> --cny 13 --note "<理由>"
 python3 products.py register-run --product <品id> --run <运行目录名>
 python3 products.py select --product <品id> --ids C001,C002 --batch <调研批次>
+python3 products.py register-references --product <品id> --files <产品图1> <产品图2>
 python3 products.py queue                                   # 全部品的队列
 python3 products.py queue --set-stage <品id> <阶段>
 ```
 
 `queue --set-stage` 只保留为人工备注。`studio status` 与队列会显示数据推导阶段以及是否和备注不同。
+
+产品参考图只读取 `product_state.json` 中由 `register-references` 登记的清单。未登记时流程会停下提示，不扫描品目录、封面、关键帧或截图来猜测。
 
 ## 手动对标（`intake.py`）
 

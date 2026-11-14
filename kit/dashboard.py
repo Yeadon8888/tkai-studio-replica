@@ -309,7 +309,8 @@ def render(data, title="Studio 看板"):
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
         f"<title>{_esc(title)}</title><style>{CSS}</style></head><body>",
-        f"<header><h1>{_esc(title)}</h1><div class=\"sub\">{_esc(data.get('subtitle', ''))}</div></header>",
+        f"<header><h1>{_esc(title)}</h1><div class=\"sub\">{_esc(data.get('subtitle', ''))}</div>"
+        "<div class=\"sub\">需要处理人工节点时，请在运行机器上执行 <code>python3 kit/studio.py console</code> 打开确认台。</div></header>",
         "<nav class=\"tabs\" id=\"tabs\"></nav>",
         "<main id=\"body\"></main>",
         "<div class=\"panel\" id=\"panel\"><div class=\"drawer\" id=\"drawer\"></div></div>",

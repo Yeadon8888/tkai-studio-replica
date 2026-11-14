@@ -29,6 +29,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/budget-and-queue.md` | 预算、品目录、多品任务队列 |
 | `references/commands.md` | 每条命令的参数 |
 | `references/workflow.md` | 数据推导阶段、人工确认节点与 `studio next` |
+| `references/console.md` | 在本地确认台查看待办、编辑脚本、判定成片 |
 | `references/versioning.md` | 发新版本、写变更记录、升级配置 |
 
 ## 流程（一个品走一遍）
@@ -49,7 +50,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 6. **生成**：先查预算，再按简报的 `video_route` 选择模型并提交。同一条简报只允许一个在途任务；保存远程地址，成片落盘后默认立即评审。只有显式 `--no-review` 才跳过并在任务记录里写原因。
 7. **审判**：机器检查 → 产品、人物、画面平台、还原度四位专家按实际时间码逐项判定 → 闸门。还原度专家同时看对标与成片；通过只表示可以交给人看。
 8. **修订循环**：不达标，把专家的具体问题交给模型修改提示词，再生成、再审判。到轮数上限、预算用完或同一缺陷连续出现，就停下来交给人。
-9. **看板与人工确认**：看板同时显示镜头表、每段、最终成片、还原度分和花费；用 `human.py` 记录人工决定，不自动扩量。
+9. **看板与人工确认**：看板同时显示镜头表、每段、最终成片、还原度分和花费；人工确认优先运行 `python3 kit/studio.py console` 使用确认台，所有写入仍走确认节点，不自动扩量。
 
 ## 高质量逐镜头复刻
 
