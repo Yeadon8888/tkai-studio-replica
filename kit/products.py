@@ -190,7 +190,9 @@ def main(argv=None):
         m = create(a.product, a.name, a.budget, a.anchor)
         print("已创建", product_dir(a.product), "预算", m["budget_cny"], "元")
     elif a.cmd == "status":
-        print(json.dumps({"product": load(a.product), "budget": spent_cny(a.product)}, ensure_ascii=False, indent=2))
+        import engine
+        print(json.dumps({"product": load(a.product), "budget": spent_cny(a.product),
+                          "derived_workflow": engine.status(a.product)}, ensure_ascii=False, indent=2))
     elif a.cmd == "approve-budget":
         m = approve_budget(a.product, a.cny, a.note)
         print("已确认预算上限", m["approved_budget_cny"], "元；理由：", m["budget_note"])
@@ -209,8 +211,11 @@ def main(argv=None):
             if st not in STAGES:
                 raise SystemExit(f"阶段必须是 {STAGES}")
             _queue_set(pid, stage=st, status="done" if st == "done" else "active")
+        import engine
         for row in queue_list():
-            print(row)
+            derived = engine.status(row["product"])
+            print({**row, "derived_stage": derived["stage"],
+                   "stage_differs": row["stage"] != derived["stage"]})
     return 0
 
 

@@ -2,6 +2,25 @@
 
 所有命令在 `kit/` 下运行（`cd kit`）。模型、价格、上限来自 `.env`，见 `configuration.md`。
 
+## 流程引擎（`studio.py`）
+
+```bash
+python3 studio.py next --product <品> [--run <运行>] [--dry-run]
+python3 studio.py status [--product <品>]
+python3 studio.py pending
+python3 studio.py approve <节点id> [--note "<说明>"] [--by <名字>]
+python3 studio.py reject <节点id> --note "<原因>" [--by <名字>]
+python3 studio.py changes <节点id> --note "<修改要求>" [--by <名字>]
+python3 studio.py edit-script <节点id> --segment 2 --field voiceover --value "..." [--by <名字>]
+python3 studio.py --json status --product <品>
+```
+
+- 所有推进都从 `next` 开始。需要确认时创建幂等节点并以退出码 3 停止。
+- `--dry-run` 不写文件、不执行命令，只显示下一动作和预计金额。
+- `--json` 放在子命令前，输出给平台或其它 Agent 使用的结构化结果。
+- 每次最多执行一个付费步骤；批准后仍会检查批准额度和品剩余预算。
+- 脚本编辑只在重新通过代码校验后写入，修改前后内容进入审计日志。
+
 ## 体检（`doctor.py`）
 
 ```bash
@@ -21,6 +40,8 @@ python3 products.py select --product <品id> --ids C001,C002 --batch <调研批�
 python3 products.py queue                                   # 全部品的队列
 python3 products.py queue --set-stage <品id> <阶段>
 ```
+
+`queue --set-stage` 只保留为人工备注。`studio status` 与队列会显示数据推导阶段以及是否和备注不同。
 
 ## 手动对标（`intake.py`）
 

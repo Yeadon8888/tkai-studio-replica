@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 import schema
+import checkpoints
+import settings
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "video_hitl_decision.schema.json"
 VERDICTS = ("accept", "iterate", "redo", "hold", "abandon", "release")
@@ -61,6 +63,20 @@ def record(project, take, verdict, note, reviewer="未署名", now=None):
     errors = schema.check(row, definition)
     if errors:
         raise ValueError("；".join(errors))
+    # 新流程以 verdict 确认节点为准；旧命令没有节点时补建并立即解决。
+    product_root = next((p for p in (project_dir, *project_dir.parents)
+                         if (p / "product_state.json").is_file()), None)
+    if product_root:
+        state = json.loads((product_root / "product_state.json").read_text(encoding="utf-8"))
+        product = state.get("product_id") or product_root.name
+        run = project_dir.name
+        subject = {"take": take, "decision": expert_decision(project_dir, take),
+                   "review": str((project_dir / "reviews" / f"{take}.decision.json").relative_to(settings.studio_home()))}
+        cp = checkpoints.create(product, run, "verdict", "人工判断这条成片是否可用", subject,
+                                ["可用", "要求修改", "不用"])
+        cp_status = "approved" if verdict in ("accept", "release") else (
+            "changes_requested" if verdict in ("iterate", "redo") else "rejected")
+        checkpoints.resolve(cp["id"], cp_status, note, reviewer)
     project_dir.mkdir(parents=True, exist_ok=True)
     with (project_dir / "human_decisions.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
