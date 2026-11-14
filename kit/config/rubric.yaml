@@ -4,6 +4,7 @@ version: 1
 pass:
   weighted_min: 8.0          # 加权总分下限
   dimension_floor: 6.5       # 任何一项低于它 = 不通过
+  essence_min: {H: 0.80, M: 0.60, L: 0.40}  # X 档不适用
 dimensions:
   soul_fidelity:       {weight: 0.17, check: "钩子类型、情绪曲线、信息顺序、转化动作与灵魂卡一致；must_keep 项逐条出现", evidence: [soul_must_keep_missing, client_requirement_unmet]}
   product_consistency: {weight: 0.2125, check: "形状/颜色/材质/关键细节与产品参考图一致；不变形、不无中生有", evidence: [product_wrong_detail, product_deformed, client_requirement_unmet]}

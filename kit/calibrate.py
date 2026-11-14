@@ -45,7 +45,8 @@ def collect_decisions(projects, legacy_path=None):
 
 def analyze(projects, legacy_path=None):
     by_take = collect_decisions(projects, legacy_path)
-    result = {"total": 0, "agree": 0, "rate": None, "false_release": [], "false_block": [], "diffs": []}
+    result = {"total": 0, "agree": 0, "rate": None, "false_release": [], "false_block": [], "diffs": [],
+              "essence_total": 0, "essence_agree": 0, "essence_rate": None, "essence_diffs": []}
     for project in projects:
         name = Path(project).name
         for (project_name, take), human in by_take.items():
@@ -69,6 +70,29 @@ def analyze(projects, legacy_path=None):
                     result["false_block"].append(sample)
     if result["total"]:
         result["rate"] = result["agree"] / result["total"]
+    for project in projects:
+        for human in load_jsonl(Path(project) / "essence_human.jsonl"):
+            take = human.get("take")
+            review_path = Path(project) / "reviews" / f"{human.get('review_id') or take}.json"
+            review = json.loads(review_path.read_text(encoding="utf-8")) if review_path.exists() else {}
+            decision = review.get("decision") or {}
+            score = (review.get("essence") or {}).get("essence_score")
+            threshold = decision.get("essence_min")
+            if score is None or threshold is None:
+                result["essence_diffs"].append({"project": Path(project).name, "take": take,
+                                                "reason": "缺少 essence_score 或档位阈值"})
+                continue
+            ai = float(score) >= float(threshold)
+            human_pass = human.get("reached") is True
+            result["essence_total"] += 1
+            if ai == human_pass:
+                result["essence_agree"] += 1
+            else:
+                result["essence_diffs"].append({"project": Path(project).name, "take": take,
+                                                "ai": ai, "human": human_pass, "score": score,
+                                                "threshold": threshold})
+    if result["essence_total"]:
+        result["essence_rate"] = result["essence_agree"] / result["essence_total"]
     return result
 
 
@@ -84,6 +108,12 @@ def print_result(result, write=print):
     for row in result["diffs"]:
         if "expert" not in row:
             write(f"缺失：{row['project']} / {row['take']}：{row['reason']}")
+    essence_rate = (f"{result['essence_agree']}/{result['essence_total']}（{result['essence_rate']:.1%}）"
+                    if result["essence_rate"] is not None else "0/0（样本不足）")
+    write(f"神韵一致率：{essence_rate}")
+    for row in result["essence_diffs"]:
+        detail = row.get("reason") or f"机器 {row['ai']}，人工 {row['human']}"
+        write(f"  {row['project']} / {row['take']}：{detail}")
 
 
 def main(argv=None):

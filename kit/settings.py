@@ -34,7 +34,7 @@ DEFAULTS = {
     "TIKHUB_BASE_URL": "https://api.tikhub.io",
     "HTTP_USER_AGENT": "TokensFactory-Media/1.1",
     # 模型：MODEL_TEXT 是默认的文本/理解模型；各环节留空则沿用它。
-    "MODEL_TEXT": "gemini-3.8-flash-low",  # 2026-11-13 实测：gemini-3.8-flash 读不到视频，-low 能读到画面与声音
+    "MODEL_TEXT": "gemini-4-hydrogen",  # 2026-11-14 真实 C023 实测读到画面、歌曲与声音类型
     "MODEL_VERIFY": "",
     "MODEL_BREAKDOWN": "",
     "MODEL_DRAFT": "",
@@ -45,7 +45,9 @@ DEFAULTS = {
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
     "MODEL_TTS": "gemini-3.8-flash-tts",
-    "MODEL_VIDEO_READ_PROBE": "gemini-3.8-flash,gemini-3.8-flash-low",
+    "MODEL_VIDEO_READ_PROBE": "gemini-4-hydrogen,gemini-3.8-flash-low",
+    "PROBE_MAX_TOKENS": "3000",
+    "AUDIO_ROUTE_DEFAULT": "auto",
     # 自动选模白名单；留空 = models.yaml 中全部 policy=allowed 的模型。
     "MODELS_ALLOWED": "",
     # 视频用途路线。MODEL_VIDEO 只作旧配置兼容；默认路线优先读 VIDEO_ROUTE_DEFAULT。

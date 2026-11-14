@@ -267,11 +267,26 @@ def _verdict_detail(row):
     return {"take": take, "video": _media_url(run_dir / "takes" / f"{take}.mp4"),
             **_reference_detail(run_dir, brief, shots),
             "decision": decision, "review": full, "issues": issues,
+            "essence": full.get("essence") or {},
             "uncited_low": decision.get("uncited_low") or [],
             "uncited_low_text": _uncited_low_text(decision.get("uncited_low") or []),
             "reviewed_at": latest.get("reviewed_at") or "", "review_history": review_rows,
             "duration": brief.get("duration") or (full.get("machine") or {}).get("facts", {}).get("duration"),
             "cost_cny": usage["video_cny"]}
+
+
+def _record_essence_calibration(row, fields):
+    if row.get("kind") != "verdict" or not fields.get("essence_reached"):
+        return
+    run_dir = settings.studio_home() / "products" / row["product"] / "runs" / row["run"]
+    payload = {"take": (row.get("subject") or {}).get("take"),
+               "review_id": fields.get("review_id") or (row.get("subject") or {}).get("take"),
+               "reached": fields["essence_reached"] == "yes",
+               "overrides": fields.get("essence_overrides") or [],
+               "reviewer": fields.get("reviewer") or "确认台"}
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / "essence_human.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def checkpoint_detail(checkpoint_id):
@@ -375,8 +390,10 @@ class Handler(BaseHTTPRequestHandler):
                           if str(value or "").strip()}
                 if fields:
                     note = (note + "；" if note else "") + "界面填写：" + json.dumps(fields, ensure_ascii=False)
+                current = checkpoints.get(checkpoint_id)
                 result = checkpoints.resolve(checkpoint_id, body.get("status"), note,
                                              body.get("by") or "确认台")
+                _record_essence_calibration(current, fields)
             self._json(result)
         except KeyError as exc:
             self._error(exc, HTTPStatus.NOT_FOUND)

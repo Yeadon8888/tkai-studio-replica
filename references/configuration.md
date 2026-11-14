@@ -39,11 +39,15 @@ python3 kit/doctor.py --online
 
 ```bash
 python3 kit/doctor.py --online --probe text,video_read,tts
+python3 kit/doctor.py --probe video_read,gemini-4-hydrogen
 ```
 
 体检明细写入 `STUDIO_HOME/ledger/probes.jsonl`，当前健康状态写入
 `STUDIO_HOME/.cache/model_health.json`；文本与 TTS 调用同时记入成本账本。视频/图片生成模型只检查
 `/v1/models` 是否列出，不执行生成。视频理解探针临时上传本地 2 秒测试片，结束后立即从媒体临时仓库删除。
+文本模型目录的 `min_output_tokens` 是推理模型的最小输出上限。调用方给得更小时自动抬高；返回
+`finish_reason=length` 或只有推理没有正文时，只放大一次上限重试。体检默认上限由
+`PROBE_MAX_TOKENS=3000` 配置；`video_read,<模型id>` 只检测显式模型。
 
 ## 常见操作
 
@@ -74,6 +78,13 @@ VIDEO_ASPECT=9:16
 简报写 `video_route`：`default | quality | fast | keyframe | replace_person | motion | auto`；不写时用 `default`。
 能力、字段和限制见 [视频模型与用途路线](video-models.md)。`MODEL_VIDEO` 与
 `VIDEO_PRICE_CNY_PER_SECOND` 只供旧 `.env` 兼容。
+
+声音路线默认按镜头表自动选择：
+```
+AUDIO_ROUTE_DEFAULT=auto  # auto | native | tts
+```
+`auto` 下，`on_camera_speech`、`music_only`、`ambient` 走 H3 原声；`voiceover`、
+`special_voice` 走 TTS。显式覆盖会作用于全部单元，但 first-last 没有可用历史音轨证据时仍降级为 TTS。
 
 价格表是 JSON，键为公开模型名与基础分辨率，金额单位是人民币元/请求秒：
 ```

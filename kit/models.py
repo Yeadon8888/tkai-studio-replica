@@ -27,9 +27,12 @@ def _validate(item):
             or not item["verified"].get("basis"):
         raise ValueError(f"模型 {item['id']} verified 必须包含 date 与 basis")
     if item["kind"] == "text":
-        for key in ("reads_video", "reads_audio", "json_reliable"):
+        for key in ("reads_video", "reads_audio", "json_reliable", "min_output_tokens"):
             if key not in item:
                 raise ValueError(f"文本模型 {item['id']} 缺字段：{key}")
+        value = item.get("min_output_tokens")
+        if value is not None and (isinstance(value, bool) or int(value) <= 0):
+            raise ValueError(f"文本模型 {item['id']} min_output_tokens 必须是正整数或 null")
     if item["kind"] == "video":
         for key in ("durations", "resolutions", "aspects", "images_min", "images_max",
                     "audio_max", "first_last", "ref_video", "seed"):

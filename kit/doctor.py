@@ -113,22 +113,30 @@ def _record(model_id, probe, healthy, reason, usage=None):
     return ("block", f"体检 {probe} / {model_id}", bool(healthy), reason)
 
 
-def _chat(model_id, parts, ref, max_tokens=120):
+def _chat(model_id, parts, ref, max_tokens=None):
     base = settings.get("TOKENSFACTORY_BASE_URL").rstrip("/")
     key = os.environ.get("TOKENSFACTORY_API_KEY", "")
-    body = {"model": model_id, "messages": [{"role": "user", "content": parts}],
-            "max_tokens": max_tokens, "temperature": 0}
-    try:
-        data = http_json("POST", base + "/v1/chat/completions",
-                         {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                          "User-Agent": settings.get("HTTP_USER_AGENT")}, body, timeout=240)
-    except urllib.error.HTTPError as exc:
-        ledger.append("tokensfactory", model_id, exc.code, project="model-doctor", ref=ref, units=1, kind="text")
-        raise
-    usage = data.get("usage") or {}
-    ledger.append("tokensfactory", model_id, "ok", project="model-doctor", ref=ref,
-                  units=1, usage=usage, kind="text")
-    return data["choices"][0]["message"].get("content") or "", usage
+    minimum = int(models.get(model_id).get("min_output_tokens") or 0)
+    requested = max(int(max_tokens or settings.get_int("PROBE_MAX_TOKENS")), minimum)
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+               "User-Agent": settings.get("HTTP_USER_AGENT")}
+    for attempt in range(2):
+        body = {"model": model_id, "messages": [{"role": "user", "content": parts}],
+                "max_tokens": requested * (2 if attempt else 1), "temperature": 0}
+        try:
+            data = http_json("POST", base + "/v1/chat/completions", headers, body, timeout=240)
+        except urllib.error.HTTPError as exc:
+            ledger.append("tokensfactory", model_id, exc.code, project="model-doctor", ref=ref, units=1, kind="text")
+            raise
+        choice = data["choices"][0]
+        message = choice.get("message") or {}
+        text, usage = message.get("content") or "", data.get("usage") or {}
+        truncated = choice.get("finish_reason") == "length" or (not text.strip() and bool(message.get("reasoning_content")))
+        ledger.append("tokensfactory", model_id, "truncated" if truncated else "ok",
+                      project="model-doctor", ref=ref, units=1, usage=usage, kind="text")
+        if not truncated:
+            return text, usage
+    raise ValueError(f"模型 {model_id} 放大输出上限重试后仍被截断")
 
 
 def probe_text(model_id):
@@ -162,23 +170,24 @@ def probe_video_read(model_ids):
         upload_info = media_host.upload(clip)
         for model_id in model_ids:
             parts = [{"type": "text", "text":
-                      '只输出严格 JSON：{"color":"red","number":7}。回答视频背景主色和画面中央数字。'},
+                      '完整观看并听完视频。只输出严格 JSON：{"color":"red","number":7,"sound":"tone"}。'
+                      '回答背景主色、中央数字，以及是否听到连续音调。'},
                      {"type": "video_url", "video_url": upload_info["url"]}]
             try:
                 text, usage = _chat(model_id, parts, "video-read", max_tokens=160)
                 ingested = loop.video_ingested(parts, usage)
-                value = parse_json(text, require=("color", "number"))
+                value = parse_json(text, require=("color", "number", "sound"))
                 answer = isinstance(value, dict) and str(value.get("color", "")).lower() in {"red", "红", "红色"} \
-                    and str(value.get("number")) == "7"
+                    and str(value.get("number")) == "7" and str(value.get("sound", "")).lower() in {"tone", "音调", "连续音调"}
                 ok = ingested is True and answer
                 if ingested is False:
                     reason = "视频 token 判定未摄取"
                 elif ingested is None:
                     reason = "响应缺少 token 明细，无法确认摄取"
                 elif not answer:
-                    reason = "画面问题回答错误"
+                    reason = "画面或声音问题回答错误"
                 else:
-                    reason = "视频已摄取且画面问题回答正确"
+                    reason = "视频已摄取且画面、声音问题回答正确"
                 rows.append(_record(model_id, "video_read", ok, reason, usage))
             except Exception as exc:
                 rows.append(_record(model_id, "video_read", False, f"调用失败：{type(exc).__name__}"))
@@ -227,12 +236,15 @@ def probe_tts(model_id):
 
 def run_probes(spec, ids):
     rows = []
-    for name in [x.strip() for x in spec.split(",") if x.strip()]:
+    names = [x.strip() for x in spec.split(",") if x.strip()]
+    explicit_text = [name for name in names if name not in {"text", "video_read", "tts", *settings.TEXT_ROLES}
+                     and name in ids and models.get(name)["kind"] == "text"]
+    for name in names:
         if name == "text":
             rows.append(probe_text(settings.model("text")))
         elif name == "video_read":
-            rows.extend(probe_video_read([x.strip() for x in settings.get("MODEL_VIDEO_READ_PROBE").split(",")
-                                          if x.strip()]))
+            targets = explicit_text or [x.strip() for x in settings.get("MODEL_VIDEO_READ_PROBE").split(",") if x.strip()]
+            rows.extend(probe_video_read(targets))
         elif name == "tts":
             rows.append(probe_tts(settings.model("tts")))
         elif name in settings.TEXT_ROLES:
@@ -243,7 +255,7 @@ def run_probes(spec, ids):
             except KeyError:
                 rows.append(("block", f"体检 {name}", False, "未知 role 或模型"))
                 continue
-            if item["kind"] == "text":
+            if item["kind"] == "text" and not ("video_read" in names and name in explicit_text):
                 rows.append(probe_text(name))
             elif item["kind"] == "tts":
                 rows.append(probe_tts(name))

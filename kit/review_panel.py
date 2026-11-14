@@ -1,8 +1,8 @@
-"""三专家评审面板：机器检查 → 三位专家打分 → 合并 → 闸门判定。
+"""四专家评审面板：机器检查 → 四位专家打分 → 合并 → 闸门判定。
 
 流程（见 references/architecture.md）
 1. 机器检查（计算型，阻塞级）：时长、分辨率、宽高比、文件大小。不过则不交给专家，直接 repair（回到 generate）。
-2. 三位专家（推断型，见 config/experts.yaml）各自打分，只负责自己的维度。
+2. 四位专家（推断型，见 config/experts.yaml）各自打分，只负责自己的维度。
 3. gate.merge_judges：逐项取较低值；否决项取并集。
 4. gate.evaluate：加权总分 ≥ 8.0、任一维度 ≥ 6.5、无否决，才 pass。
 
@@ -26,9 +26,10 @@ sys.path.insert(0, KIT)
 import yaml  # noqa: E402
 
 import gate  # noqa: E402
+import essence  # noqa: E402
 import media_host  # noqa: E402
 import settings  # noqa: E402
-from common import _read, _write, parse_json, read_anchor  # noqa: E402
+from common import _read, _write, parse_json, read_anchor, read_json  # noqa: E402
 import loop  # noqa: E402  (提供 gemini()、_frames()、_data_uri())
 
 EXPERTS_PATH = os.path.join(KIT, "config", "experts.yaml")
@@ -108,7 +109,33 @@ def machine_checks(video, brief):
     facts["bytes"] = size
     if size < 50_000:
         blocking.append(f"文件只有 {size} 字节，疑似空视频")
+    native_loudness = []
+    cursor = 0.0
+    for index, segment in enumerate(brief.get("segments") or [], 1):
+        duration = float(segment.get("duration") or 0)
+        if segment.get("audio_route") == "native":
+            loudness = _mean_volume(video, cursor, duration)
+            native_loudness.append({"segment": index, "mean_volume_db": loudness})
+            if loudness is None or loudness <= -50:
+                blocking.append(f"native 单元 {index} 没有可用音轨或平均响度不高于 -50 dB")
+        cursor += duration
+    if native_loudness:
+        facts["native_loudness"] = native_loudness
     return {"blocking": blocking, "info": info, "facts": facts}
+
+
+def _mean_volume(video, start=None, duration=None):
+    command = ["ffmpeg", "-hide_banner", "-v", "info"]
+    if start is not None:
+        command += ["-ss", f"{start:.3f}"]
+    command += ["-i", str(video)]
+    if duration is not None:
+        command += ["-t", f"{duration:.3f}"]
+    result = subprocess.run(command + [
+                             "-af", "volumedetect", "-f", "null", "-"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    match = re.search(r"mean_volume:\s*(-?(?:inf|[0-9.]+)) dB", result.stderr or "", re.I)
+    return float(match.group(1)) if match and match.group(1).lower() != "-inf" else None
 
 
 def _seam_events(video, joins):
@@ -226,12 +253,57 @@ def aggregate_segment_reviews(project, take, segment_ids, brief):
         decision = {"attempt": brief.get("attempt", 1), "decision": None,
                     "reason": "至少一段评审未完成或需人工处理", "weighted": min(weights) if weights else None,
                     "low_dimensions": lows, "vetoes": vetoes}
+    parent_essence = None
+    parent_expert = None
+    essence_data = read_json(project / "essence.json", {}) or {}
+    if essence_data and not machine["blocking"]:
+        video = project / "takes" / f"{take}.mp4"
+        source_brief = dict(brief, essence_items=[x for x in essence_data.get("items") or []
+                                                 if x.get("judge") == "expert"])
+        reference_url = brief.get("replication_reference")
+        if not reference_url or not _reachable(reference_url):
+            decision = {"attempt": brief.get("attempt", 1), "decision": None,
+                        "reason": "父成片神韵评审缺少可访问的对标视频，不得跳过第一指标"}
+        else:
+            upload_info = None
+            try:
+                mode, video_url, upload_info = _video_source(project, take, video, brief)
+                frames = loop._frames(video, project / "reviews" / "frames" / take) if mode == "frames" else []
+                r_expert = next(x for x in load_experts()["experts"] if x.get("id") == "R")
+                parent_expert = run_expert(r_expert, project.name, take, source_brief, "", [],
+                                           video_url=video_url, frames=frames, reference_url=reference_url)
+                code_rows = essence.code_results(essence_data, read_json(project / "shots.json", {}) or {},
+                                                 video, brief)
+                parent_essence = essence.merge_results(essence_data, code_rows,
+                                                        (parent_expert or {}).get("essence") or [])
+                threshold = gate.load_rubric()["pass"]["essence_min"].get(parent_essence["tier"])
+                decision.update(essence_score=round(parent_essence["essence_score"], 4),
+                                essence_min=threshold, essence_unclear=parent_essence["unclear"])
+                if threshold is not None and parent_essence["essence_score"] < threshold:
+                    retry = essence.retry_from(parent_essence)
+                    decision.update(decision="repair", stage="delivery", failed_stage="essence",
+                                    retry_from=retry,
+                                    reason=f"神韵还原度 {parent_essence['essence_score']:.1%} 低于 {parent_essence['tier']} 档 {threshold:.0%}")
+            except Exception as exc:
+                decision = {"attempt": brief.get("attempt", 1), "decision": None,
+                            "reason": f"父成片神韵评审未完成：{type(exc).__name__}"}
+            finally:
+                if upload_info:
+                    try:
+                        deleted = media_host.delete(upload_info)
+                    except Exception:
+                        deleted = False
+                    media_host.log(upload_info, {"purpose": "parent_essence_review", "take": take,
+                                                 "deleted": deleted})
     parent_job_path = project / "jobs" / f"{take}.json"
     parent_job = _read(parent_job_path) if parent_job_path.exists() else {}
     record = {"take": take, "attempt": brief.get("attempt", 1), "mode": "segments", "machine": machine,
               "generation": {"model": parent_job.get("model"), "resolution": parent_job.get("resolution"),
                              "video_route": parent_job.get("video_route")},
-              "segments": segment_rows, "experts": experts, "decision": decision, "versions": settings.stamp()}
+              "segments": segment_rows, "experts": experts + ([parent_expert] if parent_expert else []),
+              "decision": decision, "versions": settings.stamp()}
+    if parent_essence:
+        record["essence"] = parent_essence
     _save_review(project, take, take, record, decision)
     return decision
 
@@ -287,6 +359,7 @@ def _expert_prompt(exp, brief, anchor, timecode_text="", audio_available=True):
              .replace("{duration}", f"{brief_duration(brief):g}")
              .replace("{audio_rule}", audio_rule(brief, audio_available))
              .replace("{shot_list}", json.dumps(brief.get("segments") or brief.get("shot") or [], ensure_ascii=False)[:4000]))
+    focus = focus.replace("{essence_list}", json.dumps(brief.get("essence_items") or [], ensure_ascii=False)[:8000])
     return (exp["prompt"]
             .replace("{brief}", brief_text(brief)[:800])
             .replace("{anchor}", anchor or "（简报未提供锚点）")
@@ -492,6 +565,12 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
                     "weighted": None, "low_dimensions": [], "vetoes": []}
         _save_review(project, output_take, take, record, decision)
         return decision
+    essence_data = {} if brief.get("segment_of") else (read_json(project / "essence.json", {}) or {})
+    code_essence = []
+    if essence_data:
+        brief = dict(brief, essence_items=[x for x in essence_data.get("items") or [] if x.get("judge") == "expert"])
+        shots_data = read_json(project / "shots.json", {}) or {}
+        code_essence = essence.code_results(essence_data, shots_data, video, brief)
     mode, video_url, upload_info = _video_source(project, take, video, brief)
     record["mode"] = mode
     if mode == "frames" and job.get("remote_url") and brief.get("segment_of"):
@@ -534,7 +613,12 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
         _save_review(project, output_take, take, record, decision)
         return decision
     merged = gate.merge_judges(judges)
-    res = gate.evaluate(merged, attempt)
+    essence_result = None
+    if essence_data:
+        r_judge = next((x for x in judges if (x.get("judge") or {}).get("id") == "R"), {})
+        essence_result = essence.merge_results(essence_data, code_essence, r_judge.get("essence") or [])
+        record["essence"] = essence_result
+    res = gate.evaluate(merged, attempt, essence_result=essence_result)
     record["merged"] = merged
     _save_review(project, output_take, take, record, res)
     return res
@@ -554,7 +638,7 @@ def reevaluate(project, take):
                                   "judge": {"id": "legacy", "name": "R8 前历史兼容"}}]
     attempt = rec.get("attempt", 1)
     merged = gate.merge_judges(judges)
-    res = gate.evaluate(merged, attempt)
+    res = gate.evaluate(merged, attempt, essence_result=rec.get("essence"))
     rec["merged"] = merged
     rec["decision"] = res
     rec["reevaluated"] = True

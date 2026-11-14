@@ -70,6 +70,10 @@ def validate(script, shots_data, facts, competitor_terms=()):
             errors.append(f"{sid} visual_prompt 不能为空")
         elif VISUAL_TEXT.search(visual):
             errors.append(f"{sid} visual_prompt 要求渲染文字、logo 或字幕")
+        if shots_data.get("audio_mode") == "on_camera_speech" and voice:
+            required = f"The person says in English, in a "
+            if required.lower() not in visual.lower() or voice.lower() not in visual.lower():
+                errors.append(f"{sid} 出镜口播必须把完整台词和语气写进 visual_prompt")
         checked = " ".join(str(row.get(field) or "") for field in ("voiceover", "caption", "onscreen_copy"))
         for number in NUMBER.findall(checked):
             if _compact_number(number) not in fact_numbers:
@@ -139,6 +143,8 @@ def _prompt(shots_data, facts, terms, errors=None):
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
+audio_mode=on_camera_speech 时，必须把每镜完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。
+voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
 只输出 JSON：{{"scene":"...","shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"...","end_state":"..."}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}

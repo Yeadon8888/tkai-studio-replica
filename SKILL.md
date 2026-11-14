@@ -22,7 +22,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/architecture.md` | 想了解整条流程、每一步由谁负责、数据放在哪 |
 | `references/configuration.md` | 要换模型、改价格、改上限、接新的供应方 |
 | `references/tiers.md` | 定档、分配条数、各档怎么出提示词 |
-| `references/experts.md` | 审判标准、三位专家的分工、通过条件 |
+| `references/experts.md` | 审判标准、四位专家的分工、通过条件 |
 | `references/reading-and-loop.md` | 拆解的读法；生成—审判—修订循环 |
 | `references/local-video.md` | 用户给本地视频时怎么上传、拆解、删除 |
 | `references/pdca.md` | 每条视频、每个品的计划—执行—检查—改进 |
@@ -48,13 +48,13 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
    - X：不参考对标，按方法论自写脚本。
    - 所有提示词都过硬约束检查（产品锚点逐字保留等）。
 6. **生成**：先查预算，再按简报的 `video_route` 选择模型并提交。同一条简报只允许一个在途任务；保存远程地址，成片落盘后默认立即评审。只有显式 `--no-review` 才跳过并在任务记录里写原因。
-7. **审判**：机器检查 → 产品、人物、画面平台、还原度四位专家按实际时间码逐项判定 → 闸门。还原度专家同时看对标与成片；通过只表示可以交给人看。
+7. **审判**：机器检查 → 产品、人物、画面平台、还原度四位专家按实际时间码逐项判定 → 闸门。H/M/L 档先按 `essence.json` 逐项计算神韵还原度，达到 80%/60%/40% 才能通过；X 档不适用。还原度专家同时看对标与成片；通过只表示可以交给人看。
 8. **修订循环**：不达标，把专家的具体问题交给模型修改提示词，再生成、再审判。到轮数上限、预算用完或同一缺陷连续出现，就停下来交给人。
 9. **看板与人工确认**：看板同时显示镜头表、每段、最终成片、还原度分和花费；人工确认优先运行 `python3 kit/studio.py console` 使用确认台，所有写入仍走确认节点，不自动扩量。
 
 ## 高质量逐镜头复刻
 
-产品文字和声音不交给视频模型。`shot_list.py` 按真实切镜输出整体结构、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`；`keyframe.py scene` 建立共用场景；`shot_plan.py` 按连续性合并并在 15 秒边界处分块，生成时用上一块尾帧接力；`compose.py` 用 Hypit 加入口播、字幕、画面文字与音乐。具体命令见 `references/commands.md`，方法与风险见 `references/long-take.md`。
+`shot_list.py` 按真实切镜输出整体结构、声音类型、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`。出镜说话、纯音乐和环境声默认用 H3 原生音画，出镜台词会写进 `visual_prompt`；画外音和特殊角色音走 TTS。`shot_plan.py` 按连续性合并并在 15 秒边界处分块；没有历史音轨证据的 first-last 接力块自动改走 TTS。`compose.py` 按单元保留原声或混入 TTS，再加字幕和低音量音乐。具体命令见 `references/commands.md`，方法与风险见 `references/long-take.md`。
 
 ## 开工前要问创作者的三件事
 
