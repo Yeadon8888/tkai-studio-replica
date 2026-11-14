@@ -12,6 +12,7 @@
 """
 import os
 import json
+import socket
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
@@ -33,6 +34,10 @@ DEFAULTS = {
     "TOKENSFACTORY_BASE_URL": "https://tokensfactory.cc",
     "TIKHUB_BASE_URL": "https://api.tikhub.io",
     "HTTP_USER_AGENT": "TokensFactory-Media/1.1",
+    # 流域中台执行机。令牌文件由 platform_client 校验为 0600。
+    "PLATFORM_BASE_URL": "http://127.0.0.1:8886",
+    "PLATFORM_TOKEN_FILE": "~/.config/flowfield/platform-runner.token",
+    "RUNNER_ID": socket.gethostname(),
     # 模型：MODEL_TEXT 是默认的文本/理解模型；各环节留空则沿用它。
     "MODEL_TEXT": "gemini-4-hydrogen",  # 2026-11-14 真实 C023 实测读到画面、歌曲与声音类型
     "MODEL_VERIFY": "",
@@ -42,6 +47,7 @@ DEFAULTS = {
     "MODEL_REVIEW": "",
     "MODEL_REVISE": "",
     "MODEL_SCRIPT": "",
+    "MODEL_ANCHOR": "",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
     "MODEL_TTS": "gemini-3.8-flash-tts",
@@ -62,6 +68,8 @@ DEFAULTS = {
     # 视频参数与旧价格配置
     "VIDEO_PRICE_CNY_PER_SECOND": "0.13",
     "IMAGE_PRICE_CNY": "",
+    # 一次 TTS 合成的预算预留；留空表示金额未知，预算节点不得批准。
+    "TTS_PRICE_CNY": "",
     "VIDEO_DURATION": "10",
     "VIDEO_RESOLUTION": "768p",
     "VIDEO_ASPECT": "9:16",
@@ -81,7 +89,7 @@ DEFAULTS = {
     "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
-TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script")
+TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script", "anchor")
 
 _cache = None
 
@@ -229,6 +237,12 @@ def video_price():
 def image_price():
     """单张图片估价；留空表示价格未知。"""
     value = get("IMAGE_PRICE_CNY").strip()
+    return float(value) if value else None
+
+
+def tts_price():
+    """一次 TTS 合成的预算金额；留空表示未知。"""
+    value = get("TTS_PRICE_CNY").strip()
     return float(value) if value else None
 
 

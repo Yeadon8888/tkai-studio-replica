@@ -267,7 +267,7 @@ def quote_rounds(n, duration=None, price=None, rounds=(1, 2, 3), pass_rate=0.0):
     return out
 
 
-def confirm_tier(pid, candidate_id, tier, note, batch=None):
+def confirm_tier(pid, candidate_id, tier, note, batch=None, decided_by=""):
     """记录人工定档。覆盖会在 research.build 中生效，同时作为 H 档构建许可。"""
     if not note.strip():
         raise SystemExit("人工确认必须写理由 --note")
@@ -282,6 +282,7 @@ def confirm_tier(pid, candidate_id, tier, note, batch=None):
     path = b / "tier_overrides.json"
     overrides = read_json(path, {})
     overrides[candidate_id] = {"tier": tier, "note": note.strip(),
+                               "decided_by": str(decided_by or "").strip(),
                                "confirmed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     write_json(path, overrides)
     return overrides[candidate_id]
@@ -354,6 +355,7 @@ def main(argv=None):
     ct.add_argument("--id", required=True)
     ct.add_argument("--tier", required=True, choices=("H", "M", "L", "X"))
     ct.add_argument("--note", required=True)
+    ct.add_argument("--decided-by", default="")
     bu = sub.add_parser("build", help="按 plan.json 生成对标文件")
     bu.add_argument("--product", required=True)
     bu.add_argument("--run", required=True)
@@ -387,7 +389,7 @@ def main(argv=None):
         write_json(products.product_dir(pid) / "plan.json", plan)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
     elif a.cmd == "confirm-tier":
-        row = confirm_tier(pid, a.id, a.tier, a.note, batch=a.batch)
+        row = confirm_tier(pid, a.id, a.tier, a.note, batch=a.batch, decided_by=a.decided_by)
         print(f"{a.id} 已人工确认为 {row['tier']} 档：{row['note']}")
     elif a.cmd == "build":
         results = build_plan(pid, a.run)

@@ -1,5 +1,6 @@
 """由文件数据推导工作流阶段，并且一次只推进一步。"""
 import datetime as dt
+import hashlib
 import json
 import subprocess
 import sys
@@ -14,7 +15,8 @@ KIT = Path(__file__).resolve().parent
 
 STAGE_LABELS = {
     "product": "产品卡", "benchmark": "对标与档位", "plan": "计划", "shots": "镜头表",
-    "script": "脚本", "budget": "预算", "generation": "生成", "review": "评审",
+    "script": "脚本", "budget": "预算", "keyframe": "定场图", "generation": "生成",
+    "compose": "合成", "review": "评审",
     "verdict": "人工判定", "publish": "发布", "done": "完成",
 }
 
@@ -45,6 +47,53 @@ def _estimate(brief_paths):
             return None
         values.append(float(value))
     return round(sum(values), 4)
+
+
+def _budget_details(brief_paths):
+    """预算必须同时列出视频、定场图与 TTS；任一价格未知时总额保持未知。"""
+    units = []
+    needs_tts = False
+    for path in brief_paths:
+        brief = read_json(path, {}) or {}
+        segments = brief.get("segments") or []
+        if segments:
+            for index, segment in enumerate(segments, 1):
+                units.append({"kind": "video", "id": f"{brief.get('id', path.stem)}-s{index}",
+                              "model": segment.get("model") or settings.video_route_model(segment.get("video_route", "default")),
+                              "duration": segment.get("request_duration", segment.get("duration")),
+                              "unitPrice": settings.video_unit_price(
+                                  segment.get("model") or settings.video_route_model(segment.get("video_route", "default")),
+                                  segment.get("resolution")),
+                              "totalCny": segment.get("estimated_cny")})
+                if segment.get("first_frame") == "chain:prev":
+                    units.append({"kind": "chain_keyframe",
+                                  "id": f"{brief.get('id', path.stem)}-s{index}-last",
+                                  "model": settings.model("image"), "duration": None,
+                                  "unitPrice": settings.image_price(),
+                                  "totalCny": settings.image_price()})
+                needs_tts = needs_tts or segment.get("audio_route", "tts") == "tts"
+        else:
+            units.append({"kind": "video", "id": str(brief.get("id") or path.stem),
+                          "model": brief.get("model") or settings.video_route_model(brief.get("video_route", "default")),
+                          "duration": brief.get("duration"),
+                          "unitPrice": settings.video_unit_price(
+                              brief.get("model") or settings.video_route_model(brief.get("video_route", "default")),
+                              brief.get("resolution")),
+                          "totalCny": brief.get("estimated_cny", brief.get("estimate_cny"))})
+    units.append({"kind": "keyframe", "id": "scene", "model": settings.model("image"),
+                  "duration": None, "unitPrice": settings.image_price(),
+                  "totalCny": settings.image_price()})
+    if needs_tts:
+        units.append({"kind": "tts", "id": "voiceover", "model": settings.model("tts"),
+                      "duration": None, "unitPrice": settings.tts_price(),
+                      "totalCny": settings.tts_price()})
+    values = [row.get("totalCny") for row in units]
+    total = round(sum(float(value) for value in values), 4) if all(value is not None for value in values) else None
+    return {"units": units, "estimated_cny": total, "totalCny": total}
+
+
+def _file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
 
 
 def _queue_manual(product):
@@ -209,7 +258,9 @@ def adopt(product, run=None):
                          [run_dir / "shots.json"]))
     briefs = _briefs(run_dir)
     if (run_dir / "script.json").exists():
-        script_subject = {"script": str((run_dir / "script.json").relative_to(settings.studio_home()))}
+        script_path = run_dir / "script.json"
+        script_subject = {"script": str(script_path.relative_to(settings.studio_home())),
+                          "sha256": _file_sha256(script_path)}
         script_files = [run_dir / "script.json"]
     else:
         script_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in briefs]}
@@ -218,7 +269,7 @@ def adopt(product, run=None):
         evidence.append(("script", "确认迁移运行已有脚本或生成简报", script_subject, script_files))
     if briefs and (_final_takes(run_dir) or (run_dir / "reviews").exists()):
         budget_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in briefs],
-                          "estimated_cny": _estimate(briefs)}
+                          **_budget_details(briefs)}
         evidence.append(("budget", "确认迁移运行已有生成预算", budget_subject, briefs))
     adopted = []
     for kind, summary, subject, paths in evidence:
@@ -295,7 +346,9 @@ def status(product, run=None):
                              "summary": "调用脚本模型并运行代码校验", "estimated_cny": None, "approval": benchmark_cp["id"]}}
         return _with_manual(result)
     if (run_dir / "script.json").exists():
-        script_subject = {"script": str((run_dir / "script.json").relative_to(settings.studio_home()))}
+        script_path = run_dir / "script.json"
+        script_subject = {"script": str(script_path.relative_to(settings.studio_home())),
+                          "sha256": _file_sha256(script_path)}
     else:
         # H/M/L 路线的简报本身就是交给人确认的脚本与生成输入。
         script_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in early_briefs]}
@@ -318,8 +371,13 @@ def status(product, run=None):
                   "action": {"type": "local", "command": [sys.executable, str(KIT / "shot_plan.py"), "--project", str(run_dir), "--refs", ",".join(refs) or "<产品参考图>"],
                              "summary": "本地生成连续性计划", "estimated_cny": 0.0}}
         return _with_manual(result)
-    amount = _estimate(briefs)
-    budget_subject = {"briefs": [str(p.relative_to(settings.studio_home())) for p in briefs], "estimated_cny": amount}
+    budget = _budget_details(briefs)
+    amount = budget["estimated_cny"]
+    generation_values = [row.get("totalCny") for row in budget["units"]
+                         if row.get("kind") in ("video", "chain_keyframe")]
+    generation_amount = (round(sum(float(value) for value in generation_values), 4)
+                         if all(value is not None for value in generation_values) else None)
+    budget_subject = {"briefs": [str(p.relative_to(settings.studio_home())) for p in briefs], **budget}
     budget_cp = _checkpoint(product, run_id, "budget", budget_subject)
     if not budget_cp or budget_cp["status"] != "approved":
         result = {**base, "stage": "budget", "stage_label": STAGE_LABELS["budget"],
@@ -327,16 +385,50 @@ def status(product, run=None):
                              "subject": budget_subject, "options": ["批准预算", "缩减计划", "驳回"]},
                   "blocking_checkpoint": budget_cp}
         return _with_manual(result)
+    refs = _registered_references(meta)
     takes = sorted((run_dir / "takes").glob("*.mp4")) if (run_dir / "takes").exists() else []
+    if not takes and not (run_dir / "scene.png").exists():
+        if not refs:
+            result = {**base, "stage": "keyframe", "stage_label": STAGE_LABELS["keyframe"],
+                      "action": {"type": "human", "command": f"python3 kit/products.py register-references --product {product} --files <产品图...>",
+                                 "summary": "生成定场图前必须登记真实产品图"}}
+            return _with_manual(result)
+        result = {**base, "stage": "keyframe", "stage_label": STAGE_LABELS["keyframe"],
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "keyframe.py"), "scene",
+                             "--project", str(run_dir), "--product-reference", refs[0]],
+                             "summary": "生成共用定场图后停止", "estimated_cny": settings.image_price(),
+                             "approval": budget_cp["id"]}}
+        return _with_manual(result)
     if not takes:
         brief = briefs[0]
+        brief_data = read_json(brief, {}) or {}
+        cap = max(1, len(brief_data.get("segments") or []))
         result = {**base, "stage": "generation", "stage_label": STAGE_LABELS["generation"],
-                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "loop.py"), "gen", "--project", str(run_dir), "--brief", str(brief), "--cap", "1"],
-                             "summary": "生成一个视频步骤后停止", "estimated_cny": amount, "approval": budget_cp["id"]}}
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "loop.py"), "gen", "--project", str(run_dir), "--brief", str(brief), "--cap", str(cap), "--no-review"],
+                             "summary": "生成一个视频步骤后停止", "estimated_cny": generation_amount, "approval": budget_cp["id"]}}
         return _with_manual(result)
     final_takes = _final_takes(run_dir)
     if not final_takes:
         final_takes = [takes[0].stem]
+    for take in final_takes:
+        job = read_json(run_dir / "jobs" / f"{take}.json", {}) or {}
+        if not job or job.get("composed"):
+            continue
+        brief = next((path for path in briefs if path.stem == take), briefs[0])
+        brief_data = read_json(brief, {}) or {}
+        needs_tts = any(row.get("audio_route", "tts") == "tts"
+                        for row in brief_data.get("segments") or [])
+        refs = _registered_references(meta)
+        action_type = "paid" if needs_tts else "local"
+        action = {"type": action_type,
+                  "command": [sys.executable, str(KIT / "compose.py"), "--project", str(run_dir),
+                              "--brief", str(brief), "--refs", ",".join(refs)],
+                  "summary": "按声音路线合成字幕、口播和音乐后停止",
+                  "estimated_cny": settings.tts_price() if needs_tts else 0.0}
+        if action_type == "paid":
+            action["approval"] = budget_cp["id"]
+        result = {**base, "stage": "compose", "stage_label": STAGE_LABELS["compose"], "action": action}
+        return _with_manual(result)
     for take in final_takes:
         if review_history(run_dir, take):
             continue

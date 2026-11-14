@@ -52,8 +52,31 @@ def create(pid, name, budget_cny=DEFAULT_BUDGET_CNY, anchor=""):
             "approved_budget_cny": None, "budget_note": "", "selected_benchmarks": [],
             "reference_images": [], "runs": [], "created": _now()}
     write_json(d / "product_state.json", meta)
+    if str(anchor).strip():
+        (d / "product_anchor.txt").write_text(str(anchor).strip() + "\n", encoding="utf-8")
     _queue_set(pid, stage="scope", status="active", note="新建")
     return meta
+
+
+def set_anchor(pid, anchor):
+    """同时更新品状态与逐字注入使用的锚点文件。"""
+    value = " ".join(str(anchor or "").split())
+    if not value:
+        raise ValueError("产品锚点不能为空")
+    meta = load(pid)
+    meta["anchor"] = value
+    write_json(product_dir(pid) / "product_state.json", meta)
+    (product_dir(pid) / "product_anchor.txt").write_text(value + "\n", encoding="utf-8")
+    return value
+
+
+def set_facts(pid, facts):
+    """登记中台已确认的产品事实，不把空行写入产品卡。"""
+    values = [str(value).strip() for value in (facts or []) if str(value).strip()]
+    meta = load(pid)
+    meta["product_facts"] = values
+    write_json(product_dir(pid) / "product_state.json", meta)
+    return values
 
 
 def register_run(pid, run_id):
