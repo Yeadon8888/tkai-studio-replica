@@ -80,8 +80,40 @@ class CheckpointRules(StudioCase):
         self.assertEqual(over_auto["status"], "pending")
         self.assertEqual(over_balance["status"], "pending")
 
+    def test_changed_content_supersedes_only_pending_old_node(self):
+        first = checkpoints.create("p1", self.run.name, "script", "脚本", {"sha256": "one"})
+        second = checkpoints.create("p1", self.run.name, "script", "脚本", {"sha256": "two"})
+        self.assertNotEqual(first["id"], second["id"])
+        old = checkpoints.get(first["id"], "p1")
+        self.assertEqual(old["status"], "superseded")
+        self.assertEqual(old["decided_by"], "system:supersede")
+        with self.assertRaisesRegex(ValueError, "approved"):
+            checkpoints.resolve(second["id"], "superseded", "人工作废", "user")
+        with self.assertRaisesRegex(ValueError, "已作废"):
+            checkpoints.resolve(first["id"], "approved", "", "user")
+        log = (products.product_dir("p1") / "checkpoints" / "log.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"event": "superseded"', log)
+        self.assertIn(second["id"], log)
+
 
 class EngineRules(StudioCase):
+    def test_music_only_without_valid_music_returns_paid_script_rewrite(self):
+        products.select_benchmarks("p1", ["C1"])
+        first = engine.status("p1", self.run.name)
+        benchmark = checkpoints.create("p1", self.run.name, "benchmark", first["action"]["summary"],
+                                       first["action"]["subject"])
+        checkpoints.resolve(benchmark["id"], "approved", "已确认", "user")
+        (products.product_dir("p1") / "plan.json").write_text("{}", encoding="utf-8")
+        (self.run / "shots.json").write_text(json.dumps({"audio_mode": "music_only", "shots": [
+            {"id": "S01", "start": 0, "end": 4, "voiceover": ""}]}), encoding="utf-8")
+        (self.run / "script.json").write_text(json.dumps({"scene": "A table", "shots": []}), encoding="utf-8")
+
+        state = engine.status("p1", self.run.name)
+
+        self.assertEqual((state["stage"], state["action"]["type"]), ("script", "paid"))
+        self.assertEqual(state["action"]["approval"], benchmark["id"])
+        self.assertIn("--feedback-json", state["action"]["command"])
+
     def test_adopt_copies_benchmark_cover_from_project_research_batch(self):
         batch = self.home / "research" / "batch-1"
         (batch / "covers").mkdir(parents=True)

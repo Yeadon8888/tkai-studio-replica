@@ -104,6 +104,36 @@ class ScriptBlockingValidation(unittest.TestCase):
             self.assertEqual(result["generation"]["rewrite_count"], 1)
             self.assertTrue(result["generation"]["validation"][-1]["ok"])
             self.assertTrue((project / "script.json").is_file())
+            self.assertTrue((project / "script.v1.json").is_file())
+            history = [json.loads(line) for line in (project / "script_history.jsonl").read_text().splitlines()]
+            self.assertEqual(history[0]["version"], 1)
+            self.assertTrue(history[0]["validation"]["ok"])
+
+    def test_feedback_prompt_versions_legacy_script_and_records_opinion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "shots.json").write_text(json.dumps(self.source), encoding="utf-8")
+            (project / "script.json").write_text(json.dumps(self.valid), encoding="utf-8")
+            feedback = {"note": "字幕再短一点，每段不超过 8 个词", "edits": [
+                {"segment": 1, "field": "caption", "value": "Short proof"}]}
+            prompts = []
+
+            def fake(parts, **_kwargs):
+                prompts.append(parts[0]["text"])
+                return json.dumps(self.valid)
+
+            result = script_writer.build(project, ["16 parameters"], model_call=fake,
+                                         terms=[], feedback=feedback)
+
+            self.assertEqual(result["generation"]["version"], 2)
+            self.assertTrue((project / "script.v1.json").is_file())
+            self.assertTrue((project / "script.v2.json").is_file())
+            self.assertIn("优先满足这些意见，其他要求不变", prompts[0])
+            self.assertIn("字幕再短一点", prompts[0])
+            history = [json.loads(line) for line in (project / "script_history.jsonl").read_text().splitlines()]
+            self.assertEqual([row["version"] for row in history], [1, 2])
+            self.assertEqual(history[-1]["feedback"], feedback)
+            self.assertEqual(history[-1]["source"], "human_feedback")
 
 
 class ContinuityPlan(unittest.TestCase):

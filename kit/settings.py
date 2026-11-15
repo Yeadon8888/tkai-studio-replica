@@ -88,6 +88,7 @@ DEFAULTS = {
     "TIER_WEIGHTS": "H:4,M:3,L:2,X:1",
     "FISSION_MAX_N": "5",
     "MAX_ATTEMPTS": "3",
+    "SCRIPT_FEEDBACK_MAX": "3",
     "REVIEW_MAX_TOKENS": "6000",
     "VIDEO_MIN_TOKENS": "150",     # 带视频的请求里，视频至少占多少 token 才算真的读到；低于它判为没读到
     "REVIEW_FRAMES": "8",

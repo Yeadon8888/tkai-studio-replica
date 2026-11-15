@@ -181,17 +181,46 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(checkpoints.get(cp["id"])["status"], "approved")
         self.assertEqual(len(self.client.created), 1)
 
-    def test_invalid_script_edit_writes_error_to_new_pending_node(self):
+    def test_changes_requested_rewrites_and_posts_new_script_node(self):
         run, cp = self._script_checkpoint()
         self.client.remote = [{"externalId": cp["id"], "status": "changes_requested",
             "decisionNote": "修改参数", "decidedBy": "user-1",
             "edits": [{"segment": 1, "field": "voiceover", "value": "Claim 999 benefits"}]}]
         state = {"request": self._request(), "checkpointMap": {}}
-        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
-        self.assertEqual(checkpoints.get(cp["id"])["status"], "pending")
-        self.assertIn(":validation:", state["checkpointMap"][cp["id"]])
-        self.assertIn("validationError", self.client.created[-1]["payload"])
+        captured = []
+
+        def rewrite(project, feedback):
+            captured.append(feedback)
+            value = json.loads((project / "script.json").read_text(encoding="utf-8"))
+            value["shots"][0]["caption"] = "Shorter"
+            value["generation"] = {"version": 2}
+            (project / "script.json").write_text(json.dumps(value), encoding="utf-8")
+            return value
+
+        self.runner.script_builder = rewrite
+        self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertEqual(checkpoints.get(cp["id"])["status"], "changes_requested")
+        self.assertEqual(captured[0]["note"], "修改参数")
+        new_subject = {"script": str((run / "script.json").relative_to(self.home)),
+                       "sha256": engine._file_sha256(run / "script.json")}
+        new_cp = checkpoints.create("p1", run.name, "script", "确认脚本", new_subject)
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, new_cp, run))
+        payload = self.client.created[-1]["payload"]
+        self.assertEqual(payload["previousExternalId"], cp["id"])
+        self.assertEqual(payload["feedback"], captured[0])
         self.assertEqual(state["phase"], "waiting_human")
+
+    def test_script_feedback_limit_stops_without_calling_model(self):
+        run, cp = self._script_checkpoint()
+        with (run / "script_history.jsonl").open("w", encoding="utf-8") as handle:
+            for version in range(2, 5):
+                handle.write(json.dumps({"version": version, "source": "human_feedback"}) + "\n")
+        self.client.remote = [{"externalId": cp["id"], "status": "changes_requested",
+                               "decisionNote": "继续缩短", "decidedBy": "user-1", "edits": []}]
+        self.runner.script_builder = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "上限 3 次"):
+            self.runner._resolve_platform_checkpoint({"request": self._request(), "checkpointMap": {}}, cp, run)
+        self.runner.script_builder.assert_not_called()
 
     def test_budget_decision_maps_and_rejection_reports_failure(self):
         products.create("p1", "Exact Product", 5, "Exact Product")
@@ -215,6 +244,18 @@ class RunnerCase(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "rejected"):
             self.runner._resolve_platform_checkpoint(state, cp, run)
         self.assertEqual(checkpoints.get(cp["id"])["status"], "rejected")
+
+    def test_budget_changes_requested_waits_for_adjustment(self):
+        products.create("p1", "Exact Product", 5, "Exact Product")
+        run = products.new_run("p1", "test", date="20261114")
+        cp = checkpoints.create("p1", run.name, "budget", "确认预算",
+                                {"estimated_cny": 1, "totalCny": 1, "units": []})
+        self.client.remote = [{"externalId": cp["id"], "status": "changes_requested",
+                               "decisionNote": "费用太高", "decidedBy": "user-1", "edits": []}]
+        state = {"request": self._request(), "checkpointMap": {}}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertEqual(state["phase"], "waiting_human")
+        self.assertIn("请调整请求预算或缩减计划", self.client.progress_rows[-1][2])
 
     def test_verdict_is_written_to_checkpoint_and_human_log(self):
         products.create("p1", "Exact Product", 5, "Exact Product")
@@ -294,6 +335,7 @@ class EnginePipelineBudgetTest(RunnerCase):
                  "video_route": "default", "resolution": "768p"}], "estimated_cny": 1.3}
         (run / "briefs" / "hq.json").write_text(json.dumps(brief), encoding="utf-8")
         budget_state = engine.status("flow", run.name)
+        self.assertEqual(len(budget_state["action"]["subject"]["sha256"]), 16)
         budget_cp = checkpoints.create("flow", run.name, "budget", budget_state["action"]["summary"],
                                        budget_state["action"]["subject"])
         checkpoints.resolve(budget_cp["id"], "approved", "预算已确认", "platform-request")

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """由配置文本模型生成可校验、可追溯的逐镜头脚本。"""
 import argparse
+import datetime as dt
 import hashlib
 import json
 import re
@@ -70,6 +71,11 @@ def _validate_music(script, shots_data):
         if term in blob:
             errors.append(f"music 不得出现镜头表中的歌名或人名：{term}")
     return errors
+
+
+def music_errors(script, shots_data):
+    """返回纯音乐脚本的配乐描述错误；其它声音路线无需补写。"""
+    return _validate_music(script, shots_data) if shots_data.get("audio_mode") == "music_only" else []
 
 
 def _append_no_voice(script, audio_mode):
@@ -190,10 +196,16 @@ def competitor_terms(project, shots_data):
     return list(dict.fromkeys(str(x).strip() for x in flat if str(x).strip()))
 
 
-def _prompt(shots_data, facts, terms, errors=None):
+def _prompt(shots_data, facts, terms, errors=None, feedback=None, previous=None):
     correction = ""
     if errors:
         correction = "\n上一次输出被代码阻塞，请完整重写，不要解释。错误：\n- " + "\n- ".join(errors)
+    human_feedback = ""
+    if feedback:
+        human_feedback = f"""
+人的修改意见：{json.dumps(feedback, ensure_ascii=False)}
+上一版脚本：{json.dumps(previous or {}, ensure_ascii=False)}
+优先满足这些意见，其他要求不变。不得只解释意见，必须输出完整的新脚本。"""
     return f"""你是产品短视频脚本模型。只能依据给定镜头表和产品事实写脚本，不得照抄对标台词。
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
@@ -205,18 +217,49 @@ voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提�
 只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"...","end_state":"..."}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}
 产品事实：{json.dumps(facts, ensure_ascii=False)}
-镜头表：{json.dumps(shots_data, ensure_ascii=False)}{correction}"""
+镜头表：{json.dumps(shots_data, ensure_ascii=False)}{human_feedback}{correction}"""
 
 
-def build(project, extra_facts=(), model_call=loop.gemini, terms=None):
+def _versions(project):
+    rows = []
+    for path in project.glob("script.v*.json"):
+        match = re.fullmatch(r"script\.v(\d+)\.json", path.name)
+        if match:
+            rows.append((int(match.group(1)), path))
+    return sorted(rows)
+
+
+def _append_history(project, version, feedback, model_name, validation, source):
+    row = {"time": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+           "version": version, "feedback": feedback, "model": model_name,
+           "validation": validation, "source": source}
+    with (project / "script_history.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _archive_legacy(project, shots_data, facts, terms):
+    versions = _versions(project)
+    current = read_json(project / "script.json", {}) or {}
+    if current and not versions:
+        write_json(project / "script.v1.json", current)
+        errors = validate(current, shots_data, facts, terms)
+        generation = current.get("generation") if isinstance(current, dict) else {}
+        _append_history(project, 1, None, (generation or {}).get("model") or "历史脚本（模型未知）",
+                        {"ok": not errors, "errors": errors}, "legacy")
+        versions = _versions(project)
+    return current, (versions[-1][0] if versions else 0)
+
+
+def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=None):
     project = Path(project)
     shots_data = read_json(project / "shots.json")
     if not shots_data:
         raise FileNotFoundError(f"缺少 shots.json：{project / 'shots.json'}")
     facts = load_facts(project, extra_facts)
     terms = competitor_terms(project, shots_data) if terms is None else list(terms)
+    previous, latest_version = _archive_legacy(project, shots_data, facts, terms)
     raw_outputs, checks = [], []
-    prompt = _prompt(shots_data, facts, terms)
+    prompt = _prompt(shots_data, facts, terms, feedback=feedback, previous=previous)
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     parsed = None
     for attempt in range(2):
@@ -230,14 +273,20 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None):
         if not errors:
             break
         if attempt == 0:
-            prompt = _prompt(shots_data, facts, terms, errors)
+            prompt = _prompt(shots_data, facts, terms, errors, feedback, previous)
     if checks[-1]["errors"]:
         raise ValueError("脚本模型两次输出均未通过：" + "；".join(checks[-1]["errors"]))
     result = _append_no_voice(parsed, shots_data.get("audio_mode"))
     result["generation"] = {"model": settings.model("script"), "prompt_sha256": prompt_hash,
                             "temperature": TEMPERATURE, "raw_outputs": raw_outputs,
                             "validation": checks, "rewrite_count": len(raw_outputs) - 1}
+    version = latest_version + 1
+    result["generation"]["version"] = version
+    write_json(project / f"script.v{version}.json", result)
     write_json(project / "script.json", result)
+    source = "system_rewrite" if isinstance(feedback, dict) and feedback.get("source") == "system" \
+        else ("human_feedback" if feedback else "generation")
+    _append_history(project, version, feedback, result["generation"]["model"], checks[-1], source)
     return result
 
 
@@ -253,9 +302,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="用配置文本模型生成并校验逐镜头脚本")
     parser.add_argument("--project", required=True)
     parser.add_argument("--facts", required=True, help="产品事实 JSON 文件或逗号分隔卖点")
+    parser.add_argument("--feedback-json", default="", help="人的修改意见 JSON")
     args = parser.parse_args(argv)
     try:
-        result = build(args.project, _parse_facts(args.facts))
+        feedback = json.loads(args.feedback_json) if args.feedback_json else None
+        result = build(args.project, _parse_facts(args.facts), feedback=feedback)
     except ValueError as exc:
         raise SystemExit(f"脚本校验失败，已停止：{exc}") from None
     print(json.dumps({"script": str(Path(args.project) / "script.json"),
