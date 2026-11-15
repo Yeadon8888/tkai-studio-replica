@@ -37,7 +37,12 @@ def _latest_run(meta, requested=None):
 
 
 def _briefs(run_dir):
-    return sorted((run_dir / "briefs").glob("*.json")) if run_dir and (run_dir / "briefs").exists() else []
+    if not run_dir or not (run_dir / "briefs").exists():
+        return []
+    # 生成多段时 loop 会落盘 segment_of 子简报。它们供逐段评审使用，
+    # 不是新的制作范围；阶段推导和预算若再算一次会重复计费。
+    return [path for path in sorted((run_dir / "briefs").glob("*.json"))
+            if not (read_json(path, {}) or {}).get("segment_of")]
 
 
 def _estimate(brief_paths):
@@ -183,7 +188,9 @@ def _final_takes(run_dir):
     if not run_dir or not (run_dir / "takes").exists():
         return []
     segment_ids = set()
-    for path in _briefs(run_dir):
+    # 这里必须读全部简报：子简报的 segment_of 是识别分段成片的依据。
+    # 与预算/阶段推导只读顶层简报的 _briefs 用途不同。
+    for path in sorted((run_dir / "briefs").glob("*.json")):
         brief = read_json(path, {}) or {}
         if brief.get("segment_of"):
             segment_ids.add(path.stem)

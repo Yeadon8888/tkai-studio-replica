@@ -73,6 +73,39 @@ def split_group(group):
     return chunks
 
 
+def allocate_request_durations(source_durations, target_duration):
+    """H3 只收整秒；用最大余数法保持整条目标时长，避免逐段舍入累积偏差。"""
+    values = [float(value) for value in source_durations]
+    target = int(round(float(target_duration)))
+    if not values or target < len(values) or target > 15 * len(values):
+        raise ValueError(f"目标时长 {target_duration} 秒无法分配到 {len(values)} 个 1–15 秒单元")
+    result = [max(1, min(15, math.floor(value))) for value in values]
+    delta = target - sum(result)
+    if delta > 0:
+        order = sorted(range(len(values)), key=lambda i: (values[i] - math.floor(values[i]), -i), reverse=True)
+        while delta:
+            changed = False
+            for index in order:
+                if result[index] < 15 and delta:
+                    result[index] += 1
+                    delta -= 1
+                    changed = True
+            if not changed:
+                raise ValueError("目标时长超过 H3 单元上限")
+    elif delta < 0:
+        order = sorted(range(len(values)), key=lambda i: (values[i] - math.floor(values[i]), i))
+        while delta:
+            changed = False
+            for index in order:
+                if result[index] > 1 and delta:
+                    result[index] -= 1
+                    delta += 1
+                    changed = True
+            if not changed:
+                raise ValueError("目标时长低于 H3 单元下限")
+    return result
+
+
 def _script_rows(script_data):
     return {str(row.get("id")): row for row in script_data.get("shots") or []}
 
@@ -214,14 +247,19 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
                 segment["images"] = [str(scene)] + refs[:8]
             else:
                 segment.update(first_frame="chain:prev", last_frame="chain:end")
-            segment["estimated_cny"] = _estimate(route, resolution, request_duration)
             segments.append(segment)
+    target_duration = shots_data.get("target_duration", shots_data.get("duration"))
+    allocated = allocate_request_durations([row["source_duration"] for row in segments], target_duration)
+    for segment, request_duration in zip(segments, allocated):
+        segment["duration"] = request_duration
+        segment["estimated_cny"] = _estimate(segment["video_route"], segment["resolution"], request_duration)
     validate_durations(segments)
     estimates = [row["estimated_cny"] for row in segments]
     return {
         "id": brief_id, "title": f"高质量复刻 {shots_data.get('candidate_id') or ''}".strip(),
         "summary": shots_data.get("summary", ""), "duration": sum(x["duration"] for x in segments),
         "audio_mode": shots_data["audio_mode"],
+        "beats": [str(row.get("beat") or "") for row in shots_data.get("structure") or []],
         "source_duration": round(sum(_duration(x) for x in shots), 3),
         "aspect_ratio": "9:16", "resolution": "960p", "segments": segments,
         "voiceover_lines": [x["voiceover_line"] for x in segments],

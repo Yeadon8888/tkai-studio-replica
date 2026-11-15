@@ -132,6 +132,11 @@ class ShotListValidation(unittest.TestCase):
 
 
 class ShotPlanRoutes(unittest.TestCase):
+    def test_fractional_units_preserve_total_target_duration(self):
+        self.assertEqual(shot_plan.allocate_request_durations([6.5, 6.5, 7.0], 20), [7, 6, 7])
+        with self.assertRaisesRegex(ValueError, "无法分配"):
+            shot_plan.allocate_request_durations([0.4, 0.4], 1)
+
     def test_groups_continuous_shots_and_uses_scene_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -146,6 +151,7 @@ class ShotPlanRoutes(unittest.TestCase):
                 for i in range(1, 4)]}
             plan = shot_plan.make_plan(shots(), script, refs, scene_path=scene, seed=9)
         self.assertEqual([s["shot_ids"] for s in plan["segments"]], [["S01", "S02"], ["S03"]])
+        self.assertEqual(plan["beats"], ["证明"])
         self.assertEqual(plan["segments"][0]["images"][0], str(scene.resolve()))
         for segment in plan["segments"]:
             self.assertIn("do not render captions", segment["prompt"].lower())
@@ -214,11 +220,12 @@ class ComposeTimeline(unittest.TestCase):
             with mock.patch.object(compose, "synthesize_speech", return_value=project / "speech.raw.wav"), \
                     mock.patch.object(compose, "fit_audio", return_value=project / "speech.wav"), \
                     mock.patch.object(compose, "make_silence", return_value=project / "silence.wav"), \
-                    mock.patch.object(compose, "compose_hypit", side_effect=fake_compose):
+                    mock.patch.object(compose, "compose_hypit", side_effect=fake_compose), \
+                    mock.patch.object(compose, "_probe_resolution", return_value="960p"):
                 compose.build(project, brief)
             job = json.loads((project / "jobs" / "take.json").read_text(encoding="utf-8"))
         self.assertTrue(job["composed"])
-        self.assertEqual(job["resolution"], "1080p")
+        self.assertEqual(job["resolution"], "960p")
 
 
 class ReplicationExpert(unittest.TestCase):

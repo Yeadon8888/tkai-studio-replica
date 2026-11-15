@@ -95,6 +95,19 @@ def _probe_duration(path):
                                           "-of", "default=nw=1:nk=1", str(path)], text=True).strip())
 
 
+def _probe_resolution(path):
+    """记录合成文件的实际短边；native 路由保留 960p，Hypit 才固定导出 1080p。"""
+    try:
+        value = subprocess.check_output([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(path),
+        ], text=True).strip()
+        width, height = (int(part) for part in value.split("x", 1))
+        return f"{min(width, height)}p"
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+        return None
+
+
 def mean_volume(path):
     result = subprocess.run(["ffmpeg", "-hide_banner", "-v", "info", "-i", str(path),
                              "-af", "volumedetect", "-f", "null", "-"],
@@ -464,10 +477,10 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
     write_json(work / "compose.json", info)
     job_path = project / "jobs" / f"{take_id}.json"
     job = read_json(job_path, {})
-    # 两条合成路线都导出 1080×1920；最终评审应按成片规格检查，
-    # 不能继续沿用生成段或父简报的分辨率。
+    # 最终评审按成片实际规格检查；不能写死 1080p，
+    # native ffmpeg 路由会保留 H3 的 960p 画布。
     job.update(composed=True, compose_engine=info["engine"], composed_at=info["composed_at"],
-               video=str(source), resolution="1080p")
+               video=str(source), resolution=_probe_resolution(source) or job.get("resolution") or brief.get("resolution"))
     write_json(job_path, job)
     if review:
         review_panel.review_take(project, take_id, refs or [])
