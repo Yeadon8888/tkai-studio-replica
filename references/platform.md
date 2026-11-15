@@ -29,6 +29,7 @@ RUNNER_ID=
 MODEL_ANCHOR=
 IMAGE_PRICE_CNY=
 TTS_PRICE_CNY=
+SCRIPT_FEEDBACK_MAX=3
 ```
 
 `RUNNER_ID` 留空时使用主机名。`MODEL_ANCHOR` 留空时沿用 `MODEL_TEXT`。产品锚点模型必须根据产品图输出一句英文，并逐字包含中台产品名。
@@ -59,8 +60,8 @@ python3 kit/platform_runner.py --loop
 
 ## 人工节点与失败规则
 
-- `script`：中台展示逐段时长、画面提示词、口播、字幕和声音路线。中台修改会先走本地脚本校验；失败时执行机创建一个带校验错误的新待处理节点，原脚本不覆盖。
-- `budget`：中台展示每个视频单元、定场图和 TTS 明细。批准额度仍受请求预算与本地品预算双重限制。
+- `script`：中台展示逐段时长、画面提示词、口播、字幕和声音路线。选择“要求修改”后，执行机把说明和逐段修改作为人的意见交给脚本模型，代码校验通过才保存新版本；新节点带上一节点 ID 和原意见用于对比。每个运行最多自动重写 `SCRIPT_FEEDBACK_MAX` 次，默认 3 次，超过后请求失败并保留原因。每版保存在 `script.v<N>.json`，`script.json` 始终是最新版，版本元数据追加到 `script_history.jsonl`。
+- `budget`：中台展示每个视频单元、定场图、TTS 和配乐明细。选择“要求修改”后请求保持 `waiting_human`，提示调整请求预算或缩减计划；驳回才失败。批准额度仍受请求预算与本地品预算双重限制。
 - `verdict`：不单独上报确认节点。成片上传并 `complete` 后，执行机读取现有审核结果，写回本地 verdict 节点和 `human_decisions.jsonl`。
 - 上游失败不会换模型或自动重提。已有视频任务先查询原任务；失败原因上报为 `failed`。
 
@@ -74,6 +75,7 @@ python3 kit/platform_runner.py --loop
 | 请求预算超过单品上限 | 调低中台预算，或由负责人明确调整 `.env` 的 `PRODUCT_BUDGET_CNY` 后重新建请求。 |
 | 预算金额未知 | 补齐经确认的 `IMAGE_PRICE_CNY` / `TTS_PRICE_CNY` 或模型价格；不要猜价格。 |
 | 脚本修改校验失败 | 在中台新待处理节点按错误修正；本地原脚本仍保留。 |
+| 脚本自动重写达到上限 | 查看 `script_history.jsonl` 和最后一条人的意见，人工调整要求或新建请求；执行机不会继续调用模型。 |
 | 视频生成超时或网络中断 | 重新运行执行机；它会读取原 task id 查询，不会再次提交。 |
 | 成片已上传但没有结束 | 现有审核尚未给出 `approved`、`changes_requested` 或 `rejected`，执行机会继续轮询。 |
 

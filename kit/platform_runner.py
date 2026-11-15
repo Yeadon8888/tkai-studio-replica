@@ -21,6 +21,7 @@ import engine  # noqa: E402
 import intake  # noqa: E402
 import loop  # noqa: E402
 import products  # noqa: E402
+import script_writer  # noqa: E402
 import settings  # noqa: E402
 import tt_research as tt  # noqa: E402
 from common import _data_uri, read_json, write_json  # noqa: E402
@@ -200,11 +201,12 @@ def _append_human_decision(run_dir, take, decision, reason, expert_decision):
 
 class Runner:
     def __init__(self, client, *, anchor_builder=None, benchmark_registrar=None,
-                 command_runner=None, sleeper=time.sleep):
+                 command_runner=None, script_builder=None, sleeper=time.sleep):
         self.client = client
         self.anchor_builder = anchor_builder or _default_anchor
         self.benchmark_registrar = benchmark_registrar or _default_benchmark
         self.command_runner = command_runner or _run_command
+        self.script_builder = script_builder or script_writer.build
         self.sleep = sleeper
 
     def run_once(self):
@@ -338,8 +340,13 @@ class Runner:
         mapping = state.setdefault("checkpointMap", {})
         external_id = mapping.get(cp["id"], cp["id"])
         if cp["id"] not in mapping:
+            payload = _checkpoint_payload(cp, run_dir)
+            feedback = state.get("scriptFeedback") or {}
+            if cp["kind"] == "script" and feedback.get("scriptSha256") == (cp.get("subject") or {}).get("sha256"):
+                payload.update(previousExternalId=feedback["previousExternalId"],
+                               feedback=feedback["feedback"])
             self.client.create_checkpoint(request_id, external_id, cp["kind"], cp["summary"],
-                                          _checkpoint_payload(cp, run_dir))
+                                          payload)
             mapping[cp["id"]] = external_id
             _save_state(state)
         remote = next((row for row in self.client.checkpoints(request_id)
@@ -355,7 +362,8 @@ class Runner:
         note = remote.get("decisionNote") or remote.get("decision_note") or ""
         edits = remote.get("edits") or []
         try:
-            checkpoints.resolve(cp["id"], status, note, remote.get("decidedBy") or "platform-request", edits)
+            checkpoints.resolve(cp["id"], status, note, remote.get("decidedBy") or "platform-request",
+                                edits if status == "approved" else None)
         except (KeyError, TypeError, ValueError) as exc:
             if cp["kind"] != "script":
                 raise
@@ -369,8 +377,37 @@ class Runner:
             _save_state(state)
             self.client.progress(request_id, "script", f"脚本修改校验失败：{message}", "waiting_human")
             return False
-        if status != "approved":
-            raise RuntimeError(f"中台{cp['kind']}节点{status}：{note or '未填写原因'}")
+        if status == "rejected":
+            raise RuntimeError(f"中台{cp['kind']}节点 rejected（已驳回）：{note or '未填写原因'}")
+        if status == "changes_requested" and cp["kind"] == "budget":
+            message = "请调整请求预算或缩减计划"
+            state.update(phase="waiting_human", stage="budget", updatedAt=_now())
+            _save_state(state)
+            self.client.progress(request_id, "budget", f"{message}：{note}", "waiting_human")
+            return False
+        if status == "changes_requested":
+            feedback = {"note": note, "edits": edits}
+            history_path = run_dir / "script_history.jsonl"
+            rewrite_count = 0
+            if history_path.exists():
+                for line in history_path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        rewrite_count += json.loads(line).get("source") == "human_feedback"
+                    except (TypeError, ValueError):
+                        continue
+            maximum = settings.get_int("SCRIPT_FEEDBACK_MAX")
+            if rewrite_count >= maximum:
+                raise RuntimeError(f"脚本自动重写已达每个运行上限 {maximum} 次：{note}")
+            result = self.script_builder(run_dir, feedback=feedback)
+            version = (result.get("generation") or {}).get("version", rewrite_count + 2)
+            state["scriptFeedback"] = {
+                "previousExternalId": external_id, "feedback": feedback,
+                "scriptSha256": engine._file_sha256(run_dir / "script.json"), "version": version,
+            }
+            state.update(phase="running", stage="script", updatedAt=_now())
+            _save_state(state)
+            self.client.progress(request_id, "script", f"已按意见重写第 {version} 版，旧版作废")
+            return True
         state.update(phase="running", updatedAt=_now())
         _save_state(state)
         return True

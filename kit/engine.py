@@ -9,6 +9,7 @@ from pathlib import Path
 import checkpoints
 import music
 import products
+import script_writer
 import settings
 from common import read_json
 
@@ -103,6 +104,11 @@ def _budget_details(brief_paths):
 
 def _file_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+
+
+def _value_sha256(value):
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _queue_manual(product):
@@ -277,8 +283,9 @@ def adopt(product, run=None):
     if script_files and (_final_takes(run_dir) or (run_dir / "reviews").exists()):
         evidence.append(("script", "确认迁移运行已有脚本或生成简报", script_subject, script_files))
     if briefs and (_final_takes(run_dir) or (run_dir / "reviews").exists()):
+        details = _budget_details(briefs)
         budget_subject = {"briefs": [str(path.relative_to(settings.studio_home())) for path in briefs],
-                          **_budget_details(briefs)}
+                          **details, "sha256": _value_sha256(details)}
         evidence.append(("budget", "确认迁移运行已有生成预算", budget_subject, briefs))
     adopted = []
     for kind, summary, subject, paths in evidence:
@@ -354,6 +361,20 @@ def status(product, run=None):
                   "action": {"type": "paid", "command": [sys.executable, str(KIT / "script_writer.py"), "--project", str(run_dir), "--facts", facts],
                              "summary": "调用脚本模型并运行代码校验", "estimated_cny": None, "approval": benchmark_cp["id"]}}
         return _with_manual(result)
+    shots_data = read_json(run_dir / "shots.json", {}) or {}
+    script_data = read_json(run_dir / "script.json", {}) or {}
+    music_errors = script_writer.music_errors(script_data, shots_data) if script_data else []
+    if music_errors and not early_briefs:
+        facts = meta.get("anchor") or "<已确认产品事实>"
+        feedback = {"source": "system", "note": "纯音乐脚本缺少合法 music 配乐描述：" + "；".join(music_errors),
+                    "edits": []}
+        result = {**base, "stage": "script", "stage_label": STAGE_LABELS["script"],
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "script_writer.py"),
+                             "--project", str(run_dir), "--facts", facts,
+                             "--feedback-json", json.dumps(feedback, ensure_ascii=False)],
+                             "summary": "补写纯音乐脚本的配乐描述并运行代码校验",
+                             "estimated_cny": None, "approval": benchmark_cp["id"]}}
+        return _with_manual(result)
     if (run_dir / "script.json").exists():
         script_path = run_dir / "script.json"
         script_subject = {"script": str(script_path.relative_to(settings.studio_home())),
@@ -386,7 +407,8 @@ def status(product, run=None):
                          if row.get("kind") in ("video", "chain_keyframe")]
     generation_amount = (round(sum(float(value) for value in generation_values), 4)
                          if all(value is not None for value in generation_values) else None)
-    budget_subject = {"briefs": [str(p.relative_to(settings.studio_home())) for p in briefs], **budget}
+    budget_subject = {"briefs": [str(p.relative_to(settings.studio_home())) for p in briefs],
+                      **budget, "sha256": _value_sha256(budget)}
     budget_cp = _checkpoint(product, run_id, "budget", budget_subject)
     if not budget_cp or budget_cp["status"] != "approved":
         result = {**base, "stage": "budget", "stage_label": STAGE_LABELS["budget"],

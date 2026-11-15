@@ -10,7 +10,7 @@ import settings
 from common import read_json, write_json
 
 KINDS = ("benchmark", "script", "budget", "verdict", "publish", "review_data")
-STATUSES = ("pending", "approved", "rejected", "changes_requested")
+STATUSES = ("pending", "approved", "rejected", "changes_requested", "superseded")
 BLOCKING_KINDS = set(KINDS) - {"review_data"}
 
 
@@ -63,6 +63,10 @@ def create(product, run, kind, summary, subject, options=None):
     }
     write_json(path, row)
     _append(product, "created", row)
+    if kind in ("script", "budget"):
+        for previous in _same_run(product, run, kind):
+            if previous["id"] != cid and previous.get("status") == "pending":
+                supersede(previous["id"], f"{kind} 内容已变化，由新节点 {cid} 取代")
     if kind == "budget":
         amount = _amount(subject)
         auto = settings.get_float("AUTO_APPROVE_CNY")
@@ -73,6 +77,29 @@ def create(product, run, kind, summary, subject, options=None):
                            note=f"预计 {amount:g} 元不超过自动批准上限 {auto:g} 元及品剩余预算")
                 write_json(path, row)
                 _append(product, "resolved", row, automatic=True, budget=budget)
+    return row
+
+
+def _same_run(product, run, kind):
+    root = _root(product)
+    rows = []
+    for path in root.glob(f"cp-{kind}-*.json") if root.exists() else ():
+        row = read_json(path, {}) or {}
+        if row.get("run") == (run or ""):
+            rows.append(row)
+    return rows
+
+
+def supersede(checkpoint_id, reason):
+    """系统把被新内容取代的待处理节点标为作废；人工 resolve 不能设置此状态。"""
+    row = get(checkpoint_id)
+    if row.get("status") != "pending":
+        return row
+    before = dict(row)
+    row.update(status="superseded", decided_by="system:supersede", decided_at=_now(),
+               note=str(reason).strip())
+    write_json(_root(row["product"]) / f"{row['id']}.json", row)
+    _append(row["product"], "superseded", row, reason=row["note"], before=before)
     return row
 
 
@@ -151,13 +178,15 @@ def _apply_script_edits(row, edits):
 
 
 def resolve(checkpoint_id, status, note, by, edits=None):
-    if status not in STATUSES or status == "pending":
+    if status not in STATUSES or status in ("pending", "superseded"):
         raise ValueError("确认结果必须是 approved、rejected 或 changes_requested")
     if status in ("rejected", "changes_requested") and not str(note or "").strip():
         raise ValueError("驳回或要求修改时必须填写 note")
     if not str(by or "").strip():
         raise ValueError("必须填写决定人")
     row = get(checkpoint_id)
+    if row.get("status") == "superseded":
+        raise ValueError("已作废的确认节点不能再处理")
     applied = _apply_script_edits(row, list(edits or [])) if edits else []
     row.update(status=status, decided_by=str(by).strip(), decided_at=_now(),
                note=str(note or "").strip(), edits=list(row.get("edits") or []) + applied)
