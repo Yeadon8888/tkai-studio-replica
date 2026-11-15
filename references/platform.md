@@ -56,7 +56,7 @@ python3 kit/platform_runner.py --once
 python3 kit/platform_runner.py --loop
 ```
 
-`Ctrl-C` 会在当前 Python 步骤边界安全退出。请求状态保存在 `STUDIO_HOME/platform-runner/`；重启后先恢复等待人工或等待审核的请求，再领取新请求。成片上传 ID 由请求和成片确定性派生，重启不会制造重复版本。
+`Ctrl-C` 会在当前 Python 步骤边界安全退出。请求状态保存在 `STUDIO_HOME/platform-runner/`；重启后先恢复等待人工或等待审核的请求，再领取新请求。等待期间每轮都会保持原阶段和文案发送进度以续租。成片上传 ID 由请求和成片确定性派生，重启不会制造重复版本。
 
 ## 人工节点与失败规则
 
@@ -64,6 +64,8 @@ python3 kit/platform_runner.py --loop
 - `budget`：中台展示每个视频单元、定场图、TTS 和配乐明细。选择“要求修改”后请求保持 `waiting_human`，提示调整请求预算或缩减计划；驳回才失败。批准额度仍受请求预算与本地品预算双重限制。
 - `verdict`：不单独上报确认节点。成片上传并 `complete` 后，执行机读取现有审核结果，写回本地 verdict 节点和 `human_decisions.jsonl`。
 - 上游失败不会换模型或自动重提。已有视频任务先查询原任务；失败原因上报为 `failed`。
+- 中台返回 `LEASE_EXPIRED` 时，执行机会用同一 `RUNNER_ID` 续领一次，并仅重试原请求一次。历史上因该错误落盘的 `failed` 状态可在重启后恢复；其他失败不恢复。
+- 如果过期租约已被其他执行机领取，本地状态记为 `lost` 并停止处理，不会判为制作失败。
 
 ## 常见故障
 
@@ -72,6 +74,7 @@ python3 kit/platform_runner.py --loop
 | `令牌文件权限必须为 600` | 对令牌文件执行 `chmod 600`，不要放在共享目录。 |
 | HTTP 403 | 重新创建同时包含 `production:run`、`uploads:write` 的内部角色令牌。 |
 | HTTP 409 领取冲突 | 请求已被另一执行机领取；本机跳过，不强抢。 |
+| HTTP 409 `LEASE_EXPIRED` | 执行机自动续领并重试当前请求；如已被其他执行机领取，本地记为 `lost`。 |
 | 请求预算超过单品上限 | 调低中台预算，或由负责人明确调整 `.env` 的 `PRODUCT_BUDGET_CNY` 后重新建请求。 |
 | 预算金额未知 | 补齐经确认的 `IMAGE_PRICE_CNY` / `TTS_PRICE_CNY` 或模型价格；不要猜价格。 |
 | 脚本修改校验失败 | 在中台新待处理节点按错误修正；本地原脚本仍保留。 |
