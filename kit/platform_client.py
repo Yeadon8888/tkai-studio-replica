@@ -20,10 +20,11 @@ import settings
 class PlatformError(RuntimeError):
     """中台请求失败；message 已清理，可安全写日志。"""
 
-    def __init__(self, message, status=None, body=None):
+    def __init__(self, message, status=None, body=None, transient=None):
         super().__init__(message)
         self.status = status
         self.body = body
+        self.transient = status in (502, 503, 504) if transient is None else bool(transient)
 
 
 class LeaseLostError(PlatformError):
@@ -134,7 +135,7 @@ class PlatformClient:
                 if exc.code < 500 or attempt:
                     raise last from None
             except (urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError) as exc:
-                last = PlatformError(f"中台连接失败：{type(exc).__name__}")
+                last = PlatformError(f"中台连接失败：{type(exc).__name__}", transient=True)
                 if attempt:
                     raise last from None
             time.sleep(0.15)
