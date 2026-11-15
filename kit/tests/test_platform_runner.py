@@ -37,6 +37,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.__class__.calls.append(("GET", self.path, None, dict(self.headers)))
+        if self.path.startswith("/status/"):
+            self._json(int(self.path.rsplit("/", 1)[-1]), {"error": "status-test"}); return
         if self.path.endswith("/refs/1"):
             body = b"fake-image"
             self.send_response(200); self.send_header("Content-Type", "image/png")
@@ -95,6 +97,22 @@ class ClientTest(unittest.TestCase):
         bodies = [body for method, path, body, _ in ApiHandler.calls if path.endswith("/checkpoints")]
         self.assertEqual(len(bodies), 2)
         self.assertEqual(json.loads(bodies[0]), json.loads(bodies[1]))
+
+    def test_only_gateway_outage_statuses_are_transient(self):
+        for status in (502, 503, 504, 400, 409):
+            with self.subTest(status=status), self.assertRaises(platform_client.PlatformError) as raised:
+                self.client._request("GET", f"/status/{status}")
+            self.assertEqual(raised.exception.transient, status in (502, 503, 504))
+
+    def test_connection_failure_without_http_status_is_transient(self):
+        failing = platform_client.PlatformClient(
+            "http://127.0.0.1", self.token, opener=mock.Mock(
+                side_effect=platform_client.urllib.error.URLError("offline")))
+        with mock.patch.object(platform_client.time, "sleep"), \
+                self.assertRaises(platform_client.PlatformError) as raised:
+            failing.queued()
+        self.assertIsNone(raised.exception.status)
+        self.assertTrue(raised.exception.transient)
 
     def test_checkpoint_payload_is_validated_before_post(self):
         with self.assertRaisesRegex(ValueError, "缺少字段"):
@@ -240,6 +258,29 @@ class RunnerCase(unittest.TestCase):
         self.assertIn("已被其他执行机", result["error"])
         saved = json.loads(platform_runner._state_path("request-1").read_text(encoding="utf-8"))
         self.assertEqual(saved["phase"], "lost")
+
+    def test_transient_error_keeps_phase_and_does_not_report_failed(self):
+        state = {"request": self._request(), "productId": "p1", "run": "run-1",
+                 "phase": "waiting_human", "stage": "script"}
+        self.runner._advance = mock.Mock(side_effect=platform_client.PlatformError(
+            "中台连接失败：URLError", transient=True))
+        with mock.patch("builtins.print") as printed:
+            result = self.runner.process(state)
+        self.assertEqual(result["phase"], "waiting_human")
+        self.assertIn("中台连接失败", result["lastError"])
+        self.assertIn("lastErrorAt", result)
+        self.assertEqual(self.client.progress_rows, [])
+        self.assertIn("中台暂时连不上，稍后重试", printed.call_args.args[0])
+        saved = json.loads(platform_runner._state_path("request-1").read_text(encoding="utf-8"))
+        self.assertEqual(saved["phase"], "waiting_human")
+
+    def test_success_after_transient_error_clears_error_marker(self):
+        state = {"request": self._request(), "productId": "p1", "run": "run-1",
+                 "phase": "running", "lastError": "offline", "lastErrorAt": "earlier"}
+        self.runner._advance = mock.Mock(side_effect=lambda value: value)
+        result = self.runner.process(state)
+        self.assertNotIn("lastError", result)
+        self.assertNotIn("lastErrorAt", result)
 
     def test_approved_script_maps_to_local_checkpoint(self):
         run, cp = self._script_checkpoint()
@@ -528,6 +569,57 @@ class EnginePipelineBudgetTest(RunnerCase):
         self.assertEqual(engine.status("flow", run.name)["stage"], "compose")
         (run / "jobs" / "hq.json").write_text(json.dumps({"status": "saved", "composed": True}), encoding="utf-8")
         self.assertEqual(engine.status("flow", run.name)["stage"], "review")
+
+
+class LoopResilienceTest(unittest.TestCase):
+    def _run_main(self, side_effect, *, interval=7, monotonic=None):
+        runner = mock.Mock()
+        runner.run_once.side_effect = side_effect
+        sleeps = []
+        patches = [
+            mock.patch.object(platform_runner, "PlatformClient", return_value=mock.Mock()),
+            mock.patch.object(platform_runner, "Runner", return_value=runner),
+            mock.patch.object(platform_runner.time, "sleep", side_effect=sleeps.append),
+            mock.patch("builtins.print"),
+        ]
+        if monotonic is not None:
+            patches.append(mock.patch.object(platform_runner.time, "monotonic", side_effect=monotonic))
+        started = [patch.start() for patch in patches]
+        try:
+            result = platform_runner.main(["--loop", "--interval", str(interval)])
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+        return result, sleeps, started[3]
+
+    def test_backoff_sequence_caps_at_300_seconds(self):
+        self.assertEqual([platform_runner._backoff_seconds(value) for value in range(1, 8)],
+                         [20, 40, 80, 160, 300, 300, 300])
+
+    def test_loop_survives_transient_errors_and_resets_after_recovery(self):
+        offline = platform_client.PlatformError("offline", transient=True)
+        result, sleeps, printed = self._run_main([offline, offline, None, KeyboardInterrupt()])
+        self.assertEqual(result, 0)
+        self.assertEqual(sleeps, [20, 40, 7])
+        messages = [call.args[0] for call in printed.call_args_list]
+        self.assertTrue(any("中台连接已恢复" in value for value in messages))
+
+    def test_loop_survives_unexpected_error_at_normal_interval(self):
+        result, sleeps, printed = self._run_main([RuntimeError("bad local step"), KeyboardInterrupt()])
+        self.assertEqual(result, 0)
+        self.assertEqual(sleeps, [7])
+        messages = [call.args[0] for call in printed.call_args_list]
+        self.assertTrue(any("意外异常" in value and "RuntimeError" in value for value in messages))
+
+    def test_long_outage_reminds_every_ten_minutes(self):
+        offline = platform_client.PlatformError("offline", transient=True)
+        _, _, printed = self._run_main(
+            [offline, offline, offline, KeyboardInterrupt()], monotonic=[0, 1800, 2400])
+        reminders = [call.args[0] for call in printed.call_args_list if "连续断线" in call.args[0]]
+        self.assertEqual(reminders, [
+            "中台已连续断线 30 分钟，执行机仍在等待重连",
+            "中台已连续断线 40 分钟，执行机仍在等待重连",
+        ])
 
 
 if __name__ == "__main__":

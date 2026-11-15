@@ -262,6 +262,12 @@ def _append_human_decision(run_dir, take, decision, reason, expert_decision):
     return row
 
 
+def _backoff_seconds(failures):
+    """连续断线按 20、40、80……秒退避，最长 300 秒。"""
+    exponent = min(4, max(0, int(failures) - 1))
+    return min(300, 20 * (2 ** exponent))
+
+
 class Runner:
     def __init__(self, client, *, anchor_builder=None, benchmark_registrar=None,
                  command_runner=None, script_builder=None, sleeper=time.sleep):
@@ -317,10 +323,25 @@ class Runner:
                 self._prepare(state)
             if state.get("phase") == "waiting_verdict":
                 self._keep_waiting_lease(state)
-                return self._poll_verdict(state)
-            return self._advance(state)
+                result = self._poll_verdict(state)
+            else:
+                result = self._advance(state)
+            if state.pop("lastError", None) is not None:
+                state.pop("lastErrorAt", None)
+                state["updatedAt"] = _now()
+                _save_state(state)
+            return result
         except LeaseLostError as exc:
             self._lost(state, exc)
+            return state
+        except PlatformError as exc:
+            if not exc.transient:
+                self._fail(state, f"{type(exc).__name__}: {str(exc)[:800]}")
+                return state
+            state.update(lastError=f"{type(exc).__name__}: {str(exc)[:800]}",
+                         lastErrorAt=_now(), updatedAt=_now())
+            _save_state(state)
+            print(f"请求 {state['request']['id']} 中台暂时连不上，稍后重试")
             return state
         except Exception as exc:  # noqa: BLE001
             self._fail(state, f"{type(exc).__name__}: {str(exc)[:800]}")
@@ -606,10 +627,40 @@ def main(argv=None):
         runner.run_once()
         return 0
     print(f"执行机已启动，每 {args.interval:g} 秒轮询一次；Ctrl-C 安全退出")
+    failures = 0
+    disconnected_at = None
+    next_reminder_at = None
     try:
         while True:
-            runner.run_once()
-            time.sleep(max(0.1, args.interval))
+            transient = False
+            try:
+                result = runner.run_once()
+                transient = isinstance(result, dict) and bool(result.get("lastErrorAt"))
+            except Exception as exc:  # noqa: BLE001
+                transient = isinstance(exc, PlatformError) and exc.transient
+                if transient:
+                    print(f"中台暂时连不上，稍后重试：{exc}")
+                else:
+                    print(f"执行机遇到意外异常，按正常间隔继续：{type(exc).__name__}: {str(exc)[:800]}")
+            if transient:
+                failures += 1
+                now = time.monotonic()
+                if disconnected_at is None:
+                    disconnected_at = now
+                    next_reminder_at = now + 1800
+                if next_reminder_at is not None and now >= next_reminder_at:
+                    minutes = int((now - disconnected_at) // 60)
+                    print(f"中台已连续断线 {minutes} 分钟，执行机仍在等待重连")
+                    next_reminder_at = now + 600
+                delay = _backoff_seconds(failures)
+            else:
+                if disconnected_at is not None:
+                    print("中台连接已恢复，恢复正常轮询")
+                failures = 0
+                disconnected_at = None
+                next_reminder_at = None
+                delay = args.interval
+            time.sleep(max(0.1, delay))
     except KeyboardInterrupt:
         print("执行机已安全退出")
         return 0
