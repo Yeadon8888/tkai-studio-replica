@@ -25,7 +25,7 @@ import script_writer  # noqa: E402
 import settings  # noqa: E402
 import tt_research as tt  # noqa: E402
 from common import _data_uri, read_json, write_json  # noqa: E402
-from platform_client import PlatformClient, PlatformError  # noqa: E402
+from platform_client import LeaseLostError, PlatformClient, PlatformError, error_code  # noqa: E402
 
 
 def _now():
@@ -53,7 +53,8 @@ def _active_states():
     rows = []
     for path in sorted(_state_root().glob("platform-*.json")) if _state_root().exists() else ():
         row = read_json(path, {}) or {}
-        if row.get("phase") not in ("done", "failed") and row.get("request"):
+        recoverable = row.get("phase") == "failed" and "LEASE_EXPIRED" in str(row.get("error") or "")
+        if row.get("request") and (recoverable or row.get("phase") not in ("done", "failed", "lost")):
             rows.append(row)
     return rows
 
@@ -212,6 +213,10 @@ class Runner:
     def run_once(self):
         active = _active_states()
         if active:
+            if active[0].get("phase") == "failed":
+                active[0].update(phase="running", updatedAt=_now())
+                active[0].pop("error", None)
+                _save_state(active[0])
             return self.process(active[0])
         requests = self.client.queued()
         if not requests:
@@ -221,7 +226,7 @@ class Runner:
         try:
             claimed = self.client.claim(request["id"])
         except PlatformError as exc:
-            if exc.status == 409:
+            if exc.status == 409 and error_code(exc) == "REQUEST_ALREADY_CLAIMED":
                 print(f"请求 {request['id']} 已被其他执行机领取")
                 return None
             raise
@@ -239,16 +244,35 @@ class Runner:
             pass
         print(f"请求 {state['request']['id']} 失败：{message}")
 
+    def _lost(self, state, message):
+        state.update(phase="lost", error=str(message)[:1000], updatedAt=_now())
+        _save_state(state)
+        print(f"请求 {state['request']['id']} 不再处理：{message}")
+
     def process(self, state):
         try:
             if not state.get("productId"):
                 self._prepare(state)
             if state.get("phase") == "waiting_verdict":
+                self._keep_waiting_lease(state)
                 return self._poll_verdict(state)
             return self._advance(state)
+        except LeaseLostError as exc:
+            self._lost(state, exc)
+            return state
         except Exception as exc:  # noqa: BLE001
             self._fail(state, f"{type(exc).__name__}: {str(exc)[:800]}")
             return state
+
+    def _keep_waiting_lease(self, state):
+        """等待审核时仍发送 progress；已 uploaded 的请求本身没有租约。"""
+        try:
+            self.client.progress(state["request"]["id"], state.get("stage") or "uploaded",
+                                 state.get("message") or "成片已上传，等待中台审核")
+        except PlatformError as exc:
+            if exc.status == 409 and error_code(exc) == "REQUEST_NOT_RUNNING":
+                return
+            raise
 
     def _prepare(self, state):
         request = state["request"]
@@ -352,7 +376,7 @@ class Runner:
         remote = next((row for row in self.client.checkpoints(request_id)
                        if row.get("externalId") == external_id or row.get("external_id") == external_id), None)
         if not remote or remote.get("status") == "pending":
-            state.update(phase="waiting_human", stage=cp["kind"], updatedAt=_now())
+            state.update(phase="waiting_human", stage=cp["kind"], message=cp["summary"], updatedAt=_now())
             _save_state(state)
             self.client.progress(request_id, cp["kind"], cp["summary"], "waiting_human")
             return False
@@ -373,17 +397,19 @@ class Runner:
             payload.update(validationError=message, previousExternalId=external_id)
             self.client.create_checkpoint(request_id, retry_id, "script", "脚本修改校验失败，请修正后重新提交", payload)
             mapping[cp["id"]] = retry_id
-            state.update(phase="waiting_human", stage="script", updatedAt=_now())
+            message = f"脚本修改校验失败：{message}"
+            state.update(phase="waiting_human", stage="script", message=message, updatedAt=_now())
             _save_state(state)
-            self.client.progress(request_id, "script", f"脚本修改校验失败：{message}", "waiting_human")
+            self.client.progress(request_id, "script", message, "waiting_human")
             return False
         if status == "rejected":
             raise RuntimeError(f"中台{cp['kind']}节点 rejected（已驳回）：{note or '未填写原因'}")
         if status == "changes_requested" and cp["kind"] == "budget":
             message = "请调整请求预算或缩减计划"
-            state.update(phase="waiting_human", stage="budget", updatedAt=_now())
+            progress_message = f"{message}：{note}"
+            state.update(phase="waiting_human", stage="budget", message=progress_message, updatedAt=_now())
             _save_state(state)
-            self.client.progress(request_id, "budget", f"{message}：{note}", "waiting_human")
+            self.client.progress(request_id, "budget", progress_message, "waiting_human")
             return False
         if status == "changes_requested":
             feedback = {"note": note, "edits": edits}
@@ -434,7 +460,8 @@ class Runner:
             state.update(versionId=version_id, take=take, verdictCheckpoint=cp["id"], updatedAt=_now())
             _save_state(state)
         self.client.complete(request["id"], version_id, _internal_result(pid, run_dir, take))
-        state.update(phase="waiting_verdict", updatedAt=_now())
+        state.update(phase="waiting_verdict", stage="uploaded", message="成片已上传，等待中台审核",
+                     updatedAt=_now())
         _save_state(state)
         print(f"请求 {request['id']} 成片已上传，等待中台审核")
         return self._poll_verdict(state)

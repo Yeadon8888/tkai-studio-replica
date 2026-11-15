@@ -26,6 +26,21 @@ class PlatformError(RuntimeError):
         self.body = body
 
 
+class LeaseLostError(PlatformError):
+    """请求的过期租约已被其他执行机续领。"""
+
+
+def error_code(exc):
+    """从已清理的中台错误中取结构化错误码。"""
+    if not isinstance(exc, PlatformError) or not exc.body:
+        return None
+    try:
+        value = json.loads(exc.body)
+    except (TypeError, ValueError):
+        return None
+    return value.get("error") if isinstance(value, dict) else None
+
+
 def read_token(path):
     """读取 ffa_ 令牌；文件必须是普通文件且权限恰好为 0600。"""
     token_path = Path(path).expanduser()
@@ -52,7 +67,7 @@ class PlatformClient:
         self._token = read_token(token_file or settings.get("PLATFORM_TOKEN_FILE"))
         self._open = opener or urllib.request.urlopen
 
-    def _request(self, method, path, payload=None, data=None, headers=None, expect_json=True):
+    def _transport_request(self, method, path, payload=None, data=None, headers=None, expect_json=True):
         if payload is not None and data is not None:
             raise ValueError("payload 与 data 不能同时提供")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else data
@@ -88,6 +103,34 @@ class PlatformClient:
                     raise last from None
             time.sleep(0.15)
         raise last or PlatformError("中台请求失败")
+
+    @staticmethod
+    def _request_id(path):
+        prefix = "/api/agent/production-requests/"
+        if not path.startswith(prefix):
+            return None
+        encoded = path[len(prefix):].split("/", 1)[0]
+        return urllib.parse.unquote(encoded) if encoded else None
+
+    def _request(self, method, path, payload=None, data=None, headers=None, expect_json=True):
+        try:
+            return self._transport_request(method, path, payload, data, headers, expect_json)
+        except PlatformError as exc:
+            request_id = self._request_id(path)
+            if exc.status != 409 or error_code(exc) != "LEASE_EXPIRED" or not request_id:
+                raise
+        claim_path = (f"/api/agent/production-requests/"
+                      f"{urllib.parse.quote(request_id, safe='')}/claim")
+        try:
+            self._transport_request("POST", claim_path, {})
+        except PlatformError as exc:
+            if exc.status == 409 and error_code(exc) == "REQUEST_ALREADY_CLAIMED":
+                raise LeaseLostError(
+                    f"请求 {request_id} 租约过期后已被其他执行机领取",
+                    exc.status, exc.body,
+                ) from None
+            raise
+        return self._transport_request(method, path, payload, data, headers, expect_json)
 
     def queued(self):
         data = self._request("GET", "/api/agent/production-requests?status=queued")

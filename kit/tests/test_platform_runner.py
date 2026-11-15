@@ -23,6 +23,7 @@ import settings  # noqa: E402
 class ApiHandler(BaseHTTPRequestHandler):
     calls = []
     fail_once = False
+    expired_once = set()
 
     def log_message(self, *_):
         pass
@@ -45,6 +46,10 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         self.__class__.calls.append(("POST", self.path, body, dict(self.headers)))
+        if (self.path.endswith("/progress") and self.path not in self.__class__.expired_once
+                and any(value in self.path for value in ("lease-recover", "claim-conflict"))):
+            self.__class__.expired_once.add(self.path)
+            self._json(409, {"error": "LEASE_EXPIRED"}); return
         if "claim-conflict" in self.path and self.path.endswith("/claim"):
             self._json(409, {"error": "REQUEST_ALREADY_CLAIMED"}); return
         if self.path.endswith("/retry") and self.__class__.fail_once:
@@ -59,7 +64,7 @@ class ClientTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
         self.token = self.root / "token"; self.token.write_text("ffa_test-token", encoding="utf-8")
         self.token.chmod(0o600)
-        ApiHandler.calls = []; ApiHandler.fail_once = False
+        ApiHandler.calls = []; ApiHandler.fail_once = False; ApiHandler.expired_once = set()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
         self.client = platform_client.PlatformClient(
@@ -88,6 +93,26 @@ class ClientTest(unittest.TestCase):
         bodies = [body for method, path, body, _ in ApiHandler.calls if path.endswith("/checkpoints")]
         self.assertEqual(len(bodies), 2)
         self.assertEqual(json.loads(bodies[0]), json.loads(bodies[1]))
+
+    def test_lease_expired_claims_once_then_retries_original_request(self):
+        self.client.progress("lease-recover", "script", "等待确认", "waiting_human")
+        paths = [path for method, path, _, _ in ApiHandler.calls if method == "POST"]
+        self.assertEqual(paths, [
+            "/api/agent/production-requests/lease-recover/progress",
+            "/api/agent/production-requests/lease-recover/claim",
+            "/api/agent/production-requests/lease-recover/progress",
+        ])
+        self.assertTrue(all({key.lower(): value for key, value in row[3].items()}["x-runner-id"]
+                            == "runner-test" for row in ApiHandler.calls))
+
+    def test_lease_claimed_by_another_runner_raises_lost(self):
+        with self.assertRaisesRegex(platform_client.LeaseLostError, "已被其他执行机"):
+            self.client.progress("claim-conflict", "script", "等待确认", "waiting_human")
+        paths = [path for method, path, _, _ in ApiHandler.calls if method == "POST"]
+        self.assertEqual(paths, [
+            "/api/agent/production-requests/claim-conflict/progress",
+            "/api/agent/production-requests/claim-conflict/claim",
+        ])
 
     def test_upload_uses_required_raw_mp4_headers(self):
         video = self.root / "result.mp4"; video.write_bytes(b"mp4-body")
@@ -172,6 +197,27 @@ class RunnerCase(unittest.TestCase):
         self.assertIn("超过单品上限", result["error"])
         self.assertEqual(self.client.progress_rows[-1][3], "failed")
 
+    def test_run_once_recovers_only_old_lease_expired_failure(self):
+        recoverable = {"request": self._request(), "phase": "failed",
+                       "error": 'PlatformError: {"error":"LEASE_EXPIRED"}'}
+        platform_runner._save_state(recoverable)
+        self.runner.process = mock.Mock(side_effect=lambda state: state)
+        result = self.runner.run_once()
+        self.assertEqual(result["phase"], "running")
+        self.assertNotIn("error", result)
+        saved = json.loads(platform_runner._state_path("request-1").read_text(encoding="utf-8"))
+        self.assertEqual(saved["phase"], "running")
+
+    def test_lease_taken_by_another_runner_marks_state_lost(self):
+        state = {"request": self._request(), "productId": "p1", "run": "run-1",
+                 "phase": "running"}
+        self.runner._advance = mock.Mock(side_effect=platform_client.LeaseLostError("已被其他执行机"))
+        result = self.runner.process(state)
+        self.assertEqual(result["phase"], "lost")
+        self.assertIn("已被其他执行机", result["error"])
+        saved = json.loads(platform_runner._state_path("request-1").read_text(encoding="utf-8"))
+        self.assertEqual(saved["phase"], "lost")
+
     def test_approved_script_maps_to_local_checkpoint(self):
         run, cp = self._script_checkpoint()
         self.client.remote = [{"externalId": cp["id"], "status": "approved",
@@ -209,6 +255,16 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(payload["previousExternalId"], cp["id"])
         self.assertEqual(payload["feedback"], captured[0])
         self.assertEqual(state["phase"], "waiting_human")
+
+    def test_pending_human_checkpoint_renews_lease_each_poll(self):
+        run, cp = self._script_checkpoint()
+        state = {"request": self._request(), "checkpointMap": {cp["id"]: cp["id"]}}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertEqual(self.client.progress_rows, [
+            ("request-1", "script", "确认脚本", "waiting_human"),
+            ("request-1", "script", "确认脚本", "waiting_human"),
+        ])
 
     def test_script_feedback_limit_stops_without_calling_model(self):
         run, cp = self._script_checkpoint()
@@ -273,6 +329,16 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(checkpoints.get(cp["id"])["status"], "approved")
         row = json.loads((run / "human_decisions.jsonl").read_text().strip())
         self.assertEqual(row["decision"], "accept")
+
+    def test_waiting_verdict_sends_progress_each_poll_without_changing_text(self):
+        state = {"request": self._request(), "productId": "p1", "run": "run-1",
+                 "phase": "waiting_verdict", "stage": "uploaded",
+                 "message": "成片已上传，等待中台审核"}
+        result = self.runner.process(state)
+        self.assertEqual(result["phase"], "waiting_verdict")
+        self.assertEqual(self.client.progress_rows, [
+            ("request-1", "uploaded", "成片已上传，等待中台审核", "running"),
+        ])
 
     def test_upload_then_reads_rejected_verdict_and_writes_back(self):
         products.create("p1", "Exact Product", 5, "Exact Product")
