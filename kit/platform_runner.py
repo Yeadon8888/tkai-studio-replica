@@ -53,7 +53,8 @@ def _active_states():
     rows = []
     for path in sorted(_state_root().glob("platform-*.json")) if _state_root().exists() else ():
         row = read_json(path, {}) or {}
-        recoverable = row.get("phase") == "failed" and "LEASE_EXPIRED" in str(row.get("error") or "")
+        error = str(row.get("error") or "")
+        recoverable = row.get("phase") == "failed" and ("LEASE_EXPIRED" in error or "中台连接失败" in error)
         if row.get("request") and (recoverable or row.get("phase") not in ("done", "failed", "lost")):
             rows.append(row)
     return rows

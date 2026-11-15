@@ -249,6 +249,13 @@ class RunnerCase(unittest.TestCase):
         saved = json.loads(platform_runner._state_path("request-1").read_text(encoding="utf-8"))
         self.assertEqual(saved["phase"], "running")
 
+    def test_run_once_recovers_old_connection_failure(self):
+        old = {"request": self._request(), "phase": "failed",
+               "error": "PlatformError: 中台连接失败：URLError"}
+        platform_runner._save_state(old)
+        self.runner.process = mock.Mock(side_effect=lambda state: state)
+        self.assertEqual(self.runner.run_once()["phase"], "running")
+
     def test_lease_taken_by_another_runner_marks_state_lost(self):
         state = {"request": self._request(), "productId": "p1", "run": "run-1",
                  "phase": "running"}
