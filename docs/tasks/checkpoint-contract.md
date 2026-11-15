@@ -19,3 +19,10 @@
 ```
 配乐、定场图、TTS 各占一行（`durationSeconds` 可为空，`unitPriceCny` 为单次价）。`totalCny` 为空表示有未知价格，中台禁止批准。
 **作废**：执行机调用 `POST /api/agent/production-requests/:id/checkpoints/:externalId/supersede`，`{"reason":"..."}`；中台把该节点标记作废（`superseded_at`、`superseded_reason`），作废节点不能再被决定（409 `CHECKPOINT_SUPERSEDED`），页面默认折叠为"已作废（第 N 版）"。
+
+## 附加字段
+
+脚本节点 payload 可以附加以下字段；它们不改变 v1 既有字段的含义，旧中台可以忽略：
+
+- `format`：字符串。由 `format.json` 生成的中文形式说明，例如“对标无字幕；对标无人声；钩子是回复评论贴纸（出现在 S01）；无 CTA；品名出现 0 次”。
+- `essencePreview`：`{"score":1.0,"items":[{"label":"字幕有无","status":"pass","detail":"..."}]}`。`score` 是付费前纯代码预估分；`items` 使用中文标签，`status` 为 `pass | fail | unclear`。

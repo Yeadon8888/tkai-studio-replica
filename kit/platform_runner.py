@@ -118,8 +118,20 @@ def _script_payload(run_dir):
             "onscreenCopy": row.get("onscreen_copy", ""),
             "audioRoute": route,
         })
-    return {"contractVersion": 1, "audioMode": audio_mode, "scene": script.get("scene", ""),
-            "music": script.get("music") or {}, "segments": segments}
+    payload = {"contractVersion": 1, "audioMode": audio_mode, "scene": script.get("scene", ""),
+               "music": script.get("music") or {}, "segments": segments}
+    format_data = read_json(run_dir / "format.json", {}) or {}
+    if format_data.get("description"):
+        payload["format"] = format_data["description"]
+    preview = read_json(run_dir / "essence_preview.json", {}) or {}
+    if "score" in preview:
+        payload["essencePreview"] = {
+            "score": preview["score"],
+            "items": [{"label": row.get("label") or row.get("id") or "未命名项",
+                       "status": row.get("status") or "unclear", "detail": row.get("detail") or ""}
+                      for row in preview.get("items") or []],
+        }
+    return payload
 
 
 def _budget_label(unit):

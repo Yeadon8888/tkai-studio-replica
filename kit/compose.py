@@ -18,6 +18,7 @@ sys.path.insert(0, str(KIT))
 from common import _now, read_json, write_json  # noqa: E402
 import ledger  # noqa: E402
 import review_panel  # noqa: E402
+import format_invariants  # noqa: E402
 
 
 def timeline(brief):
@@ -27,10 +28,11 @@ def timeline(brief):
         duration = float(segment.get("duration") or 0)
         if duration <= 0:
             raise ValueError(f"第 {index} 段 duration 必须大于 0")
+        captions = brief.get("captions") is not False
+        caption = (segment.get("caption") or segment.get("voiceover_line") or "") if captions else ""
         row = {"id": f"S{index:02d}", "start": round(cursor, 3), "end": round(cursor + duration, 3),
-               "caption": str(segment.get("caption") or segment.get("voiceover_line") or "").strip(),
-               "onscreen_copy": str(segment.get("onscreen_copy") or "").strip()}
-        if not row["caption"]:
+               "caption": str(caption).strip(), "onscreen_copy": segment.get("onscreen_copy") or ""}
+        if captions and not row["caption"]:
             raise ValueError(f"第 {index} 段缺少字幕文案")
         rows.append(row)
         cursor += duration
@@ -40,7 +42,20 @@ def timeline(brief):
     return rows
 
 
-def apply_script(brief, script):
+def _joined_onscreen(selected):
+    values = [row.get("onscreen_copy") for row in selected
+              if format_invariants.text_value(row.get("onscreen_copy"))]
+    if not values:
+        return ""
+    objects = [value for value in values if isinstance(value, dict)]
+    if objects:
+        if len(values) != 1:
+            raise ValueError("一个合成分段只能包含一个回复评论贴纸")
+        return objects[0]
+    return " ".join(str(value).strip() for value in values)
+
+
+def apply_script(brief, script, format_data=None):
     """合成前以 script.json 为文案唯一来源，避免 Agent 或旧简报手改文案。"""
     rows = {str(row.get("id")): row for row in (script or {}).get("shots") or []}
     if not rows:
@@ -55,9 +70,11 @@ def apply_script(brief, script):
         updated = dict(segment)
         updated["voiceover_line"] = " ".join(str(x.get("voiceover") or "").strip() for x in selected).strip()
         updated["caption"] = " ".join(str(x.get("caption") or "").strip() for x in selected).strip()
-        updated["onscreen_copy"] = " ".join(str(x.get("onscreen_copy") or "").strip() for x in selected).strip()
+        updated["onscreen_copy"] = _joined_onscreen(selected)
         segments.append(updated)
     result["segments"] = segments
+    if format_data:
+        result["captions"] = bool(format_data.get("captions"))
     return result
 
 
@@ -68,8 +85,9 @@ def srt_text(rows):
         minute, millis = divmod(millis, 60_000)
         second, millis = divmod(millis, 1000)
         return f"{hour:02d}:{minute:02d}:{second:02d},{millis:03d}"
-    return "\n\n".join(f"{i}\n{stamp(row['start'])} --> {stamp(row['end'])}\n{row['caption']}"
-                         for i, row in enumerate(rows, 1)) + "\n"
+    captions = [row for row in rows if str(row.get("caption") or "").strip()]
+    return ("\n\n".join(f"{i}\n{stamp(row['start'])} --> {stamp(row['end'])}\n{row['caption']}"
+                          for i, row in enumerate(captions, 1)) + "\n") if captions else ""
 
 
 def _probe_duration(path):
@@ -153,6 +171,21 @@ def fit_music(source, output, duration):
 def make_overlay(output, text, kind="caption"):
     """生成透明全画幅文字图；文字图层的时间与叠放由 Hypit 管理。"""
     output = Path(output)
+    if kind == "reply_sticker":
+        from PIL import Image, ImageDraw, ImageFont
+        value = text if isinstance(text, dict) else {}
+        handle = str(value.get("handle") or "@viewer")
+        comment = str(value.get("comment") or "").strip()
+        image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((90, 245, 865, 540), radius=38, fill=(255, 255, 255, 244))
+        small, large = ImageFont.load_default(size=28), ImageFont.load_default(size=42)
+        draw.text((135, 285), f"Reply to {handle}'s comment", font=small, fill=(70, 70, 70, 255))
+        wrapped = "\n".join(textwrap.wrap(comment, width=28, break_long_words=False,
+                                           break_on_hyphens=False))
+        draw.multiline_text((135, 350), wrapped, font=large, fill=(25, 25, 25, 255), spacing=10)
+        image.save(output)
+        return output
     text_path = output.with_suffix(".txt")
     wrapped = "\n".join(textwrap.wrap(text, width=34, break_long_words=False,
                                        break_on_hyphens=False)) if kind == "caption" else text
@@ -197,7 +230,8 @@ def _find_build_id(value):
 def _hypit_source(rows, duration, overlays):
     windows = []
     for index, row in enumerate(rows, 1):
-        windows.append(f'    <time:Window id="caption-{index}" from="{row["start"]}s" for="{row["end"] - row["start"]}s"/>')
+        if row.get("caption"):
+            windows.append(f'    <time:Window id="caption-{index}" from="{row["start"]}s" for="{row["end"] - row["start"]}s"/>')
         if row.get("onscreen_copy"):
             windows.append(f'    <time:Window id="copy-{index}" from="{row["start"]}s" for="{row["end"] - row["start"]}s"/>')
     visual_tracks = ['  <visual:Track id="picture-track" timeline={program.timeline}>',
@@ -206,6 +240,8 @@ def _hypit_source(rows, duration, overlays):
     film_tracks = ['    <film:Track source={picture-track.visual}/>']
     for index, row in enumerate(rows, 1):
         for kind in ("caption", "copy"):
+            if kind == "caption" and not row.get("caption"):
+                continue
             if kind == "copy" and not row.get("onscreen_copy"):
                 continue
             ident = f"{kind}-{index}"
@@ -256,11 +292,13 @@ def compose_hypit(project, source_video, voice, music, rows, output):
     overlay_dir = Path(project) / "compose" / "overlays"
     overlay_dir.mkdir(parents=True, exist_ok=True)
     for index, row in enumerate(rows, 1):
-        caption = make_overlay(overlay_dir / f"caption-{index}.png", row["caption"], "caption")
-        _import(hypit_project, caption, f"caption-{index}")
-        overlays.append(caption)
+        if row.get("caption"):
+            caption = make_overlay(overlay_dir / f"caption-{index}.png", row["caption"], "caption")
+            _import(hypit_project, caption, f"caption-{index}")
+            overlays.append(caption)
         if row.get("onscreen_copy"):
-            copy = make_overlay(overlay_dir / f"copy-{index}.png", row["onscreen_copy"], "copy")
+            kind = "reply_sticker" if isinstance(row["onscreen_copy"], dict) else "copy"
+            copy = make_overlay(overlay_dir / f"copy-{index}.png", row["onscreen_copy"], kind)
             _import(hypit_project, copy, f"copy-{index}")
             overlays.append(copy)
     duration = rows[-1]["end"]
@@ -279,14 +317,40 @@ def compose_hypit(project, source_video, voice, music, rows, output):
     return {"engine": "hypit", "build_id": build_id, "project": str(hypit_project)}
 
 
+def _video_layers(rows, workdir, input_start):
+    workdir = Path(workdir)
+    filters, extra_inputs = [], []
+    subtitle_text = srt_text(rows)
+    if subtitle_text:
+        srt = workdir / "captions.srt"
+        srt.write_text(subtitle_text, encoding="utf-8")
+        escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        filters.append(f"[0:v]subtitles='{escaped}'[v0]")
+    else:
+        filters.append("[0:v]null[v0]")
+    current, overlay_index = "v0", 0
+    overlay_dir = workdir / "overlays"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    for index, row in enumerate(rows, 1):
+        value = row.get("onscreen_copy")
+        if not format_invariants.text_value(value):
+            continue
+        kind = "reply_sticker" if isinstance(value, dict) else "copy"
+        path = make_overlay(overlay_dir / f"ffmpeg-copy-{index}.png", value, kind)
+        extra_inputs += ["-loop", "1", "-i", str(path)]
+        next_label = f"v{overlay_index + 1}"
+        filters.append(f"[{current}][{input_start + overlay_index}:v]overlay=0:0:"
+                       f"enable='between(t,{row['start']:.3f},{row['end']:.3f})'[{next_label}]")
+        current, overlay_index = next_label, overlay_index + 1
+    return extra_inputs, filters, current
+
+
 def compose_ffmpeg(source_video, voice, music, rows, output, workdir):
-    srt = Path(workdir) / "captions.srt"
-    srt.write_text(srt_text(rows), encoding="utf-8")
-    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music),
-                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[2:a]volume=0.12[music];"
+    extra, video_filters, video_label = _video_layers(rows, workdir, 3)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music), *extra,
+                    "-filter_complex", ";".join([*video_filters, "[2:a]volume=0.12[music]",
                     "[1:a][music]amix=inputs=2:duration=longest[a]",
-                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
+                    ]), "-map", f"[{video_label}]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
                     "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
     return {"engine": "ffmpeg", "reason": "Hypit 不可用或执行失败", "music_gain": 0.12}
 
@@ -296,13 +360,11 @@ def compose_native(source_video, music, rows, output, workdir):
     loudness = mean_volume(source_video)
     if loudness is None or loudness <= -50:
         raise ValueError("native 单元没有可用音轨或平均响度不高于 -50 dB")
-    srt = Path(workdir) / "captions.srt"
-    srt.write_text(srt_text(rows), encoding="utf-8")
-    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music),
-                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[n];"
+    extra, video_filters, video_label = _video_layers(rows, workdir, 2)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music), *extra,
+                    "-filter_complex", ";".join([*video_filters, "[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[n]",
                     "[1:a]volume=0.12[m];[n][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
-                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
+                    ]), "-map", f"[{video_label}]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
                     "-movflags", "+faststart", "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
     return {"engine": "ffmpeg-native", "native_mean_volume_db": loudness, "music_gain": 0.12}
 
@@ -311,12 +373,10 @@ def compose_music(source_video, music, rows, output, workdir):
     """纯配乐路线显式丢弃 H3 原生音轨，只铺已核验的配乐。"""
     if not music or not Path(music).is_file():
         raise FileNotFoundError("纯配乐路线没有可用配乐，已停止合成")
-    srt = Path(workdir) / "captions.srt"
-    srt.write_text(srt_text(rows), encoding="utf-8")
-    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music),
-                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[1:a]anull[a]",
-                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
+    extra, video_filters, video_label = _video_layers(rows, workdir, 2)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music), *extra,
+                    "-filter_complex", ";".join([*video_filters, "[1:a]anull[a]"]),
+                    "-map", f"[{video_label}]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
                     "-movflags", "+faststart", "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
     return {"engine": "ffmpeg-music", "source_audio": "discarded", "music_lufs": -16}
 
@@ -325,9 +385,7 @@ def compose_mixed(source_video, voice, music, rows, segments, output, workdir):
     """按单元在 H3 原声和 TTS 之间切换，最后统一响度并压低音乐。"""
     if mean_volume(source_video) is None:
         raise ValueError("混合路线中的 native 单元没有音轨")
-    srt = Path(workdir) / "captions.srt"
-    srt.write_text(srt_text(rows), encoding="utf-8")
-    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    extra, video_filters, video_label = _video_layers(rows, workdir, 3)
     pieces, labels, tts_cursor = [], [], 0.0
     for index, (row, segment) in enumerate(zip(rows, segments)):
         start, end = float(row["start"]), float(row["end"])
@@ -339,12 +397,12 @@ def compose_mixed(source_video, voice, music, rows, segments, output, workdir):
             pieces.append(f"[1:a]atrim=start={tts_cursor:.3f}:end={tts_cursor + duration:.3f},asetpts=PTS-STARTPTS,adelay={delay}|{delay}[{label}]")
             tts_cursor += duration
         labels.append(f"[{label}]")
-    filters = [f"[0:v]subtitles='{escaped}'[v]", *pieces,
+    filters = [*video_filters, *pieces,
                f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest,loudnorm=I=-16:TP=-1.5:LRA=11[dialogue]",
                "[2:a]volume=0.12[music]",
                "[dialogue][music]amix=inputs=2:duration=first:dropout_transition=2[a]"]
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music),
-                    "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[a]",
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music), *extra,
+                    "-filter_complex", ";".join(filters), "-map", f"[{video_label}]", "-map", "[a]",
                     "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
                     "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
     return {"engine": "ffmpeg-mixed", "audio_routes": [x.get("audio_route", "tts") for x in segments],
@@ -357,7 +415,8 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
     script_path = project / "script.json"
     if not script_path.is_file():
         raise FileNotFoundError(f"缺少 script.json；请先运行 script_writer.py：{script_path}")
-    brief = apply_script(brief, read_json(script_path))
+    format_data = read_json(project / "format.json", {}) or {}
+    brief = apply_script(brief, read_json(script_path), format_data)
     rows = timeline(brief)
     take_id = brief["id"]
     source = project / "takes" / f"{take_id}.mp4"
@@ -386,7 +445,8 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
         info = compose_native(raw, music, rows, output, work)
     elif routes != {"music"}:
         speech_raw = synthesize_speech(project, " ".join(
-            row["caption"] for row, segment in zip(rows, brief.get("segments") or [])
+            str(segment.get("voiceover_line") or row["caption"]).strip()
+            for row, segment in zip(rows, brief.get("segments") or [])
             if segment.get("audio_route", "tts") == "tts"), work / "voiceover.raw.wav", voice)
         tts_duration = sum(row["end"] - row["start"] for row, segment in zip(rows, segments)
                            if segment.get("audio_route", "tts") == "tts")

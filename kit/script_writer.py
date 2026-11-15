@@ -14,6 +14,7 @@ sys.path.insert(0, str(KIT))
 from common import parse_json, read_json, write_json  # noqa: E402
 import loop  # noqa: E402
 import settings  # noqa: E402
+import format_invariants  # noqa: E402
 
 TEMPERATURE = 0.2
 FIELDS = ("visual_prompt", "voiceover", "caption", "onscreen_copy", "end_state")
@@ -93,7 +94,22 @@ def _append_no_voice(script, audio_mode):
     return result
 
 
-def validate(script, shots_data, facts, competitor_terms=()):
+def _reply_parts(value):
+    value = str(value or "").strip()
+    match = re.match(r"reply\s+to\s+(@?[\w.-]+)'s\s+comment\s*(.*)", value, re.I)
+    if match:
+        return match.group(1).lower().lstrip("@"), match.group(2).strip()
+    match = re.match(r"replying\s+to\s+@?([\w.-]+)\s*(.*)", value, re.I)
+    return (match.group(1).lower(), match.group(2).strip()) if match else ("", value)
+
+
+def _word_overlap(left, right):
+    generated = set(re.findall(r"[a-z0-9']+", str(left or "").lower()))
+    source = set(re.findall(r"[a-z0-9']+", str(right or "").lower()))
+    return len(generated & source) / len(generated) if generated else 0.0
+
+
+def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
     """返回阻塞错误；不修补模型输出。"""
     errors = []
     if not isinstance(script, dict) or not str(script.get("scene") or "").strip():
@@ -101,6 +117,7 @@ def validate(script, shots_data, facts, competitor_terms=()):
     if shots_data.get("audio_mode") == "music_only":
         errors.extend(_validate_music(script, shots_data))
     source_shots = shots_data.get("shots") or []
+    format_data = format_data or format_invariants.derive(shots_data)
     rows = script.get("shots")
     if not isinstance(rows, list) or len(rows) != len(source_shots):
         return [f"shots 必须有 {len(source_shots)} 段"]
@@ -135,23 +152,63 @@ def validate(script, shots_data, facts, competitor_terms=()):
             required = f"The person says in English, in a "
             if required.lower() not in visual.lower() or voice.lower() not in visual.lower():
                 errors.append(f"{sid} 出镜口播必须把完整台词和语气写进 visual_prompt")
-        checked = " ".join(str(row.get(field) or "") for field in ("voiceover", "caption", "onscreen_copy"))
+        checked = " ".join(format_invariants.text_value(row.get(field))
+                           for field in ("voiceover", "caption", "onscreen_copy"))
         for number in NUMBER.findall(checked):
             if _compact_number(number) not in fact_numbers:
                 errors.append(f"{sid} 数字或参数没有产品事实依据：{number.strip()}")
-        all_text = " ".join(str(row.get(field) or "") for field in FIELDS).lower()
+        all_text = " ".join(format_invariants.text_value(row.get(field)) for field in FIELDS).lower()
         for term in terms:
             if term in all_text:
                 errors.append(f"{sid} 出现竞品品牌词：{term}")
         if re.search(r"\b(?:this|our|a|an)\s+product\b", all_text):
             errors.append(f"{sid} 产品称呼只能使用产品锚点名称或 the product")
-        original_text = " ".join(str(row.get(field) or "") for field in FIELDS)
+        original_text = " ".join(format_invariants.text_value(row.get(field)) for field in FIELDS)
         for match in NAMED_PRODUCT.finditer(original_text):
             phrase = match.group(0).lower()
             if phrase != "the product" and phrase not in fact_blob:
                 errors.append(f"{sid} 产品称呼不在产品锚点中：{match.group(0)}")
     if actual_voice != expected_voice:
         errors.append(f"非空口播段数应为 {expected_voice}，实际 {actual_voice}")
+    if bool(actual_voice) != bool(format_data.get("voice")):
+        errors.append("口播有无必须与对标 audio_mode 一致")
+    target_captions = any(str(row.get("caption") or "").strip() for row in rows if isinstance(row, dict))
+    if target_captions != bool(format_data.get("captions")):
+        errors.append("字幕有无必须与对标一致")
+    all_script_text = list(format_invariants.script_texts(script))
+    if not format_data.get("cta") and any(format_invariants.has_cta(value) for value in all_script_text):
+        errors.append("对标无 CTA，脚本不得新增行动号召")
+    product_names = format_invariants.script_product_names(facts)
+    mention_count = format_invariants.count_names(all_script_text, product_names)
+    mention_limit = int(format_data.get("product_mentions") or 0) + 1
+    if mention_count > mention_limit:
+        errors.append(f"品名出现 {mention_count} 次，超过对标次数 + 1（上限 {mention_limit}）")
+    sticker_ids = set(str(value) for value in format_data.get("reply_sticker_shots") or [])
+    actual_style = format_invariants.script_style(script)
+    if actual_style != format_data.get("onscreen_style"):
+        errors.append(f"屏幕文字形式应为 {format_data.get('onscreen_style')}，实际为 {actual_style}")
+    source_stickers = [row for row in format_data.get("onscreen") or []
+                       if row.get("style") == "reply_sticker"]
+    source_handles, source_comments = zip(*(_reply_parts(row.get("text")) for row in source_stickers)) \
+        if source_stickers else ((), ())
+    for row in rows:
+        sid, value = str(row.get("id")), row.get("onscreen_copy")
+        if format_data.get("onscreen_style") == "reply_sticker":
+            if sid in sticker_ids:
+                valid = (isinstance(value, dict) and value.get("style") == "reply_sticker"
+                         and re.fullmatch(r"@[A-Za-z0-9._]{3,24}", str(value.get("handle") or ""))
+                         and str(value.get("comment") or "").strip())
+                if not valid:
+                    errors.append(f"{sid} onscreen_copy 必须是含虚构 handle 和 comment 的 reply_sticker 对象")
+                    continue
+                if str(value["handle"]).lower().lstrip("@") in source_handles:
+                    errors.append(f"{sid} 回复评论贴纸不得使用对标真实用户名")
+                if any(_word_overlap(value["comment"], comment) > .60 for comment in source_comments):
+                    errors.append(f"{sid} 回复评论与对标原文词重合率超过 60%")
+            elif format_invariants.text_value(value):
+                errors.append(f"{sid} 不在对标贴纸时段，onscreen_copy 必须为空")
+        elif isinstance(value, dict):
+            errors.append(f"{sid} 对标不是回复评论贴纸，onscreen_copy 必须是字符串")
     return list(dict.fromkeys(errors))
 
 
@@ -196,7 +253,7 @@ def competitor_terms(project, shots_data):
     return list(dict.fromkeys(str(x).strip() for x in flat if str(x).strip()))
 
 
-def _prompt(shots_data, facts, terms, errors=None, feedback=None, previous=None):
+def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, previous=None):
     correction = ""
     if errors:
         correction = "\n上一次输出被代码阻塞，请完整重写，不要解释。错误：\n- " + "\n- ".join(errors)
@@ -206,7 +263,17 @@ def _prompt(shots_data, facts, terms, errors=None, feedback=None, previous=None)
 人的修改意见：{json.dumps(feedback, ensure_ascii=False)}
 上一版脚本：{json.dumps(previous or {}, ensure_ascii=False)}
 优先满足这些意见，其他要求不变。不得只解释意见，必须输出完整的新脚本。"""
-    return f"""你是产品短视频脚本模型。只能依据给定镜头表和产品事实写脚本，不得照抄对标台词。
+    sticker_rule = ("onscreen_copy 只在指定贴纸镜头输出对象 "
+                    '{"style":"reply_sticker","handle":"@虚构用户名","comment":"一句虚构评论"}；'
+                    "其它镜头必须为空字符串；评论只对应原评论意图，不得照抄原文或真实用户名。"
+                    if format_data.get("onscreen_style") == "reply_sticker" else
+                    "onscreen_copy 在普通文字叠加时输出英文字符串，对标无屏幕文字时输出空字符串。")
+    caption_rule = ("对标无连续字幕，所有 caption 必须是空字符串。" if not format_data.get("captions")
+                    else "对标有连续字幕，caption 保持与对标一致的出现方式。")
+    return f"""你是复刻对标的脚本模型：保持对标的形式（字幕有无、屏幕文字形式、有无 CTA、语气），只把对标里的同类产品换成我们的产品。只能依据给定镜头表和产品事实写脚本，不得照抄对标台词。
+形式不变量：{format_data.get('description', '')}
+{caption_rule}
+{sticker_rule}
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
@@ -214,7 +281,7 @@ audio_mode=on_camera_speech 时，必须把每镜完整 voiceover 原文同时�
 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
-只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"...","end_state":"..."}}]}}
+只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"..."}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}
 产品事实：{json.dumps(facts, ensure_ascii=False)}
 镜头表：{json.dumps(shots_data, ensure_ascii=False)}{human_feedback}{correction}"""
@@ -237,12 +304,12 @@ def _append_history(project, version, feedback, model_name, validation, source):
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _archive_legacy(project, shots_data, facts, terms):
+def _archive_legacy(project, shots_data, facts, terms, format_data):
     versions = _versions(project)
     current = read_json(project / "script.json", {}) or {}
     if current and not versions:
         write_json(project / "script.v1.json", current)
-        errors = validate(current, shots_data, facts, terms)
+        errors = validate(current, shots_data, facts, terms, format_data)
         generation = current.get("generation") if isinstance(current, dict) else {}
         _append_history(project, 1, None, (generation or {}).get("model") or "历史脚本（模型未知）",
                         {"ok": not errors, "errors": errors}, "legacy")
@@ -257,9 +324,10 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
         raise FileNotFoundError(f"缺少 shots.json：{project / 'shots.json'}")
     facts = load_facts(project, extra_facts)
     terms = competitor_terms(project, shots_data) if terms is None else list(terms)
-    previous, latest_version = _archive_legacy(project, shots_data, facts, terms)
+    format_data = format_invariants.build(project)
+    previous, latest_version = _archive_legacy(project, shots_data, facts, terms, format_data)
     raw_outputs, checks = [], []
-    prompt = _prompt(shots_data, facts, terms, feedback=feedback, previous=previous)
+    prompt = _prompt(shots_data, facts, terms, format_data, feedback=feedback, previous=previous)
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     parsed = None
     for attempt in range(2):
@@ -268,12 +336,12 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
                          temperature=TEMPERATURE, role="script")
         raw_outputs.append(raw)
         parsed = parse_json(raw, require=("scene", "shots"))
-        errors = validate(parsed, shots_data, facts, terms) if parsed is not None else ["输出不是含 scene、shots 的 JSON 对象"]
+        errors = validate(parsed, shots_data, facts, terms, format_data) if parsed is not None else ["输出不是含 scene、shots 的 JSON 对象"]
         checks.append({"attempt": attempt + 1, "ok": not errors, "errors": errors})
         if not errors:
             break
         if attempt == 0:
-            prompt = _prompt(shots_data, facts, terms, errors, feedback, previous)
+            prompt = _prompt(shots_data, facts, terms, format_data, errors, feedback, previous)
     if checks[-1]["errors"]:
         raise ValueError("脚本模型两次输出均未通过：" + "；".join(checks[-1]["errors"]))
     result = _append_no_voice(parsed, shots_data.get("audio_mode"))
