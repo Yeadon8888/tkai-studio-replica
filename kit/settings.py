@@ -49,6 +49,7 @@ DEFAULTS = {
     "MODEL_SCRIPT": "",
     "MODEL_ANCHOR": "",
     "MODEL_AUDIO_CHECK": "",
+    "MODEL_TRANSCRIBE": "gemini-3.8-flash",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
     "MODEL_TTS": "gemini-3.8-flash-tts",
@@ -97,7 +98,8 @@ DEFAULTS = {
     "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
-TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script", "anchor", "audio_check")
+TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script", "anchor",
+              "audio_check", "transcribe")
 
 _cache = None
 

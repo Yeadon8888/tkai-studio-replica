@@ -121,6 +121,22 @@ class ScriptBlockingValidation(unittest.TestCase):
                                     terms=[], max_attempts=1)
         self.assertEqual(len(calls), 1)
 
+    def test_failed_output_writes_hash_only_audit(self):
+        raw = "RAW SECRET-LIKE SCRIPT TEXT"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "shots.json").write_text(json.dumps(self.source), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                script_writer.build(project, ["16 parameters"], model_call=lambda *_a, **_k: raw,
+                                    terms=[], max_attempts=1)
+            row = json.loads((project / "script_failures.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(row["attempt"], 1)
+        self.assertEqual(len(row["prompt_sha256"]), 64)
+        self.assertEqual(len(row["output_sha256"]), 64)
+        self.assertNotIn("RAW", json.dumps(row))
+        self.assertEqual(set(row), {"time", "model", "prompt_sha256", "output_sha256",
+                                    "errors", "attempt"})
+
     def test_feedback_prompt_versions_legacy_script_and_records_opinion(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)

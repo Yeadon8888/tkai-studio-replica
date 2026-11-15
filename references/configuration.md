@@ -55,13 +55,14 @@ python3 kit/doctor.py --probe video_read,gemini-4-hydrogen
 ```
 MODEL_TEXT=<新模型名>
 MODEL_SCRIPT=                 # 留空沿用 MODEL_TEXT
+MODEL_TRANSCRIBE=gemini-3.8-flash  # 只读 16k mono MP3 对标音轨
 ```
 
 **只换某个环节的模型**（例如审判用更强的模型，其余不变）
 ```
 MODEL_REVIEW=<新模型名>
 ```
-可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_SCRIPT`（逐镜头脚本、口播和字幕）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。留空就沿用 `MODEL_TEXT`。
+可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_SCRIPT`（逐镜头脚本、口播和字幕）、`MODEL_TRANSCRIBE`（对标纯音轨转写）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。除 `MODEL_TRANSCRIBE` 默认固定为 `gemini-3.8-flash` 外，留空就沿用 `MODEL_TEXT`。
 
 **按用途选择视频模型**
 ```

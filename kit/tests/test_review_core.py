@@ -80,6 +80,23 @@ class GenerationReview(unittest.TestCase):
 
 
 class ReviewInput(unittest.TestCase):
+    def test_local_benchmark_is_uploaded_for_review_then_deleted(self):
+        with tempfile.TemporaryDirectory() as root:
+            project = Path(root); (project / "benchmark").mkdir()
+            (project / "benchmark/video.mp4").write_bytes(b"video")
+            info = {"url": "https://temp/reference.mp4", "path": "reference.mp4"}
+            with mock.patch.object(review_panel, "_reachable", return_value=False), \
+                 mock.patch.object(review_panel.media_host, "upload", return_value=info) as upload, \
+                 mock.patch.object(review_panel.media_host, "delete", return_value=True) as delete, \
+                 mock.patch.object(review_panel.media_host, "log") as log:
+                url, uploaded = review_panel._reference_source(
+                    project, {"replication_reference_file": "benchmark/video.mp4"})
+                review_panel._cleanup_upload(uploaded, "review_reference", "T1")
+        self.assertEqual(url, info["url"])
+        upload.assert_called_once_with(project / "benchmark/video.mp4")
+        delete.assert_called_once_with(info)
+        self.assertTrue(log.call_args.args[1]["deleted"])
+
     def test_expert_receives_reference_and_video_without_frames(self):
         with tempfile.TemporaryDirectory() as root:
             ref = Path(root) / "ref.png"

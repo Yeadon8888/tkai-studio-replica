@@ -14,6 +14,7 @@ import doctor  # noqa: E402
 import essence  # noqa: E402
 import gate  # noqa: E402
 import loop  # noqa: E402
+import audio_transcript  # noqa: E402
 import review_panel  # noqa: E402
 import shot_list  # noqa: E402
 import shot_plan  # noqa: E402
@@ -150,6 +151,55 @@ class AudioRouteTest(unittest.TestCase):
 
 
 class OutputLimitTest(unittest.TestCase):
+    def test_audio_requires_tokens_and_sends_user_agent_and_low_reasoning(self):
+        parts = [{"type": "input_audio", "input_audio": {"data": "eA==", "format": "mp3"}}]
+        bodies, headers = [], []
+
+        def response(_method, _url, request_headers, body, timeout):
+            headers.append(request_headers); bodies.append(body)
+            return {"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens_details": {"audio_tokens": 481}}}
+
+        with mock.patch.object(loop.settings, "model", return_value="gemini-3.8-flash"), \
+             mock.patch.object(loop.models, "get", return_value={}), \
+             mock.patch.object(loop.tt, "load_tf_env", return_value=("https://x", "secret")), \
+             mock.patch.object(loop.common, "http_json", side_effect=response), \
+             mock.patch.object(loop.ledger, "count_text_calls", return_value=0), \
+             mock.patch.object(loop.ledger, "append"):
+            self.assertEqual(loop.gemini(parts, "p", "r", role="transcribe",
+                                         reasoning_effort="low"), "ok")
+        self.assertTrue(headers[0]["User-Agent"])
+        self.assertEqual(bodies[0]["reasoning_effort"], "low")
+
+        with mock.patch.object(loop.settings, "model", return_value="gemini-3.8-flash"), \
+             mock.patch.object(loop.models, "get", return_value={}), \
+             mock.patch.object(loop.tt, "load_tf_env", return_value=("https://x", "secret")), \
+             mock.patch.object(loop.common, "http_json", return_value={
+                 "choices": [{"finish_reason": "stop", "message": {"content": "invented"}}], "usage": {}}), \
+             mock.patch.object(loop.ledger, "count_text_calls", return_value=0), \
+             mock.patch.object(loop.ledger, "append"):
+            with self.assertRaises(loop.AudioNotIngested):
+                loop.gemini(parts, "p", "r", role="transcribe")
+
+    def test_transcript_uses_only_mono_mp3_and_keeps_original_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project, source = Path(tmp), Path(tmp) / "video.mp4"
+            source.write_bytes(b"video")
+
+            def extract(_video, output):
+                output = Path(output); output.parent.mkdir(parents=True); output.write_bytes(b"mp3")
+                return output
+
+            def model(parts, **kwargs):
+                self.assertEqual([part["type"] for part in parts], ["text", "input_audio"])
+                self.assertEqual(kwargs["reasoning_effort"], "low")
+                return json.dumps({"language": "en", "segments": [
+                    {"start": 1.25, "end": 2.75, "speaker": "villain", "text": "Don't test me"}]})
+
+            with mock.patch.object(audio_transcript, "extract_audio", side_effect=extract):
+                value = audio_transcript.transcribe(source, project, model_call=model)
+        self.assertEqual(value["timebase"], "reference_original_seconds")
+        self.assertEqual(value["segments"][0]["start"], 1.25)
     def test_loop_uses_minimum_and_retries_length_once(self):
         replies = [
             {"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning_content": "思考"}}], "usage": {}},

@@ -72,6 +72,10 @@ class VideoNotIngested(RuntimeError):
     2026-11-13 实测：Release 附件链接（有跳转）会被网关静默丢弃，模型照样编出结论。"""
 
 
+class AudioNotIngested(RuntimeError):
+    """请求含 input_audio，但用量中没有音频 token。"""
+
+
 def video_ingested(parts, usage):
     """按用量判断视频是否被读到：去掉文字 token 和每张图约 1100 token 后，至少还要有 VIDEO_MIN_TOKENS。
     用量里没有明细时返回 None（无法判断）。"""
@@ -85,7 +89,14 @@ def video_ingested(parts, usage):
     return rest >= settings.get_int("VIDEO_MIN_TOKENS")
 
 
-def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
+def audio_ingested(parts, usage):
+    if not any(part.get("type") == "input_audio" for part in parts):
+        return None
+    details = (usage or {}).get("prompt_tokens_details") or {}
+    return isinstance(details.get("audio_tokens"), (int, float)) and details["audio_tokens"] > 0
+
+
+def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text", reasoning_effort=None):
     """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
     model = settings.model(role)
     cap = settings.get_int("LIMIT_TEXT_CALLS")
@@ -100,6 +111,8 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
         limit = requested * (2 if attempt else 1)
         body = {"model": model, "messages": [{"role": "user", "content": parts}],
                 "max_tokens": limit, "temperature": temperature}
+        if reasoning_effort:
+            body["reasoning_effort"] = reasoning_effort
         try:
             js = common.http_json("POST", base + "/v1/chat/completions", headers, body, timeout=240)
         except urllib.error.HTTPError as e:
@@ -110,12 +123,16 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text"):
         text = message.get("content") or ""
         usage = js.get("usage") or {}
         seen = video_ingested(parts, usage)
+        heard = audio_ingested(parts, usage)
         truncated = choice.get("finish_reason") == "length" or (not text.strip() and bool(message.get("reasoning_content")))
-        status = "truncated" if truncated else ("ok" if seen is not False else "video_not_ingested")
+        status = "truncated" if truncated else ("audio_not_ingested" if heard is False else
+                 ("ok" if seen is not False else "video_not_ingested"))
         ledger.append(settings.get("TEXT_PROVIDER"), model, status, project=project, ref=ref,
                       units=1, usage=usage, kind="text")
         if seen is False:
             raise VideoNotIngested("模型没有读到视频（按 token 判断），结果作废；检查视频地址是否需要跳转或已失效")
+        if heard is False:
+            raise AudioNotIngested("模型没有读到音频（usage.prompt_tokens_details.audio_tokens 为 0 或缺失）")
         if not truncated:
             return text
     raise ValueError(f"模型 {model} 放大输出上限重试后仍被截断")

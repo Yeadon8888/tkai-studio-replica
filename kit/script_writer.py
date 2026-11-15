@@ -123,9 +123,9 @@ def format_errors(script, shots_data):
     captions = any(str(row.get("caption") or "").strip() for row in rows)
     if captions != bool(format_data.get("captions")):
         errors.append("字幕有无必须与对标一致")
-    if not format_data.get("cta") and any(format_invariants.has_cta(value)
-                                          for value in format_invariants.script_texts(script)):
-        errors.append("对标无 CTA，脚本不得新增行动号召")
+    actual_cta = format_invariants.cta_kind(rows)
+    if actual_cta != format_data.get("cta_kind", "direct" if format_data.get("cta") else "none"):
+        errors.append(f"CTA 类型必须与对标一致：{format_data.get('cta_kind') or 'none'}")
     actual_style = format_invariants.script_style(script)
     if actual_style != format_data.get("onscreen_style"):
         errors.append(f"屏幕文字形式应为 {format_data.get('onscreen_style')}，实际为 {actual_style}")
@@ -157,9 +157,17 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
             errors.append(f"{sid} 缺失")
             continue
         missing = [field for field in FIELDS if field not in row]
+        if format_data.get("cta_structured") and "cta" not in row:
+            missing.append("cta")
         if missing:
             errors.append(f"{sid} 缺字段：{', '.join(missing)}")
             continue
+        if "cta" in row:
+            cta_text = " ".join(format_invariants.text_value(row.get(field))
+                                for field in ("voiceover", "caption", "onscreen_copy"))
+            cta_error = format_invariants.validate_cta(row.get("cta"), cta_text)
+            if cta_error:
+                errors.append(f"{sid} {cta_error}")
         voice = str(row.get("voiceover") or "").strip()
         actual_voice += bool(voice)
         words = re.findall(r"\b[\w'-]+\b", voice)
@@ -199,8 +207,12 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
     if target_captions != bool(format_data.get("captions")):
         errors.append("字幕有无必须与对标一致")
     all_script_text = list(format_invariants.script_texts(script))
-    if not format_data.get("cta") and any(format_invariants.has_cta(value) for value in all_script_text):
-        errors.append("对标无 CTA，脚本不得新增行动号召")
+    expected_cta = format_data.get("cta_kind", "direct" if format_data.get("cta") else "none")
+    actual_cta = format_invariants.cta_kind(rows)
+    if actual_cta != expected_cta:
+        errors.append(f"CTA 类型必须与对标一致：期望 {expected_cta}，实际 {actual_cta}")
+        if expected_cta == "none":
+            errors.append("对标无 CTA，脚本不得新增行动号召")
     product_names = format_invariants.script_product_names(facts)
     mention_count = format_invariants.count_names(all_script_text, product_names)
     mention_limit = int(format_data.get("product_mentions") or 0) + 1
@@ -251,7 +263,9 @@ def load_facts(project, extra):
     state = read_json(root / "product_state.json", {}) or {}
     anchor_path = root / "product_anchor.txt"
     anchor = anchor_path.read_text(encoding="utf-8").strip() if anchor_path.is_file() else ""
-    return {"product_state": state, "product_anchor": anchor, "confirmed_selling_points": list(extra)}
+    meta = read_json(Path(project) / "project.json", {}) or {}
+    return {"product_state": state, "product_anchor": anchor, "confirmed_selling_points": list(extra),
+            "replication_notes": meta.get("replication_notes") or ""}
 
 
 def competitor_terms(project, shots_data):
@@ -293,10 +307,14 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
                     "onscreen_copy 在普通文字叠加时输出英文字符串，对标无屏幕文字时输出空字符串。")
     caption_rule = ("对标无连续字幕，所有 caption 必须是空字符串。" if not format_data.get("captions")
                     else "对标有连续字幕，caption 保持与对标一致的出现方式。")
+    cta_rule = ("CTA kind 必须是 reverse：保留至少一个反派反向求饶、求观众别买或别测的 CTA，"
+                "不得改成正向下单或购买 CTA。" if format_data.get("cta_kind") == "reverse" else
+                f"CTA kind 必须是 {format_data.get('cta_kind', 'none')}。")
     return f"""你是复刻对标的脚本模型：保持对标的形式（字幕有无、屏幕文字形式、有无 CTA、语气），只把对标里的同类产品换成我们的产品。只能依据给定镜头表和产品事实写脚本，不得照抄对标台词。
 形式不变量：{format_data.get('description', '')}
 {caption_rule}
 {sticker_rule}
+{cta_rule}
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
@@ -304,7 +322,8 @@ voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中�
 speaker_on_screen=false 的 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
-只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"..."}}]}}
+每镜输出 cta={{"present":true|false,"kind":"direct|reverse|none","evidence":"本镜台词或画面文字原文，无则空字符串"}}。
+只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"...","cta":{{"present":false,"kind":"none","evidence":""}}}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}
 产品事实：{json.dumps(facts, ensure_ascii=False)}
 镜头表：{json.dumps(shots_data, ensure_ascii=False)}{human_feedback}{correction}"""
@@ -327,6 +346,16 @@ def _append_history(project, version, feedback, model_name, validation, source):
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _append_failure(project, model_name, prompt, raw, errors, attempt):
+    row = {"time": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+           "model": model_name,
+           "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+           "output_sha256": hashlib.sha256(str(raw).encode("utf-8")).hexdigest(),
+           "errors": list(errors), "attempt": attempt}
+    with (Path(project) / "script_failures.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def _archive_legacy(project, shots_data, facts, terms, format_data):
     versions = _versions(project)
     current = read_json(project / "script.json", {}) or {}
@@ -342,8 +371,8 @@ def _archive_legacy(project, shots_data, facts, terms, format_data):
 
 def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=None, max_attempts=2):
     project = Path(project)
-    if max_attempts not in (1, 2):
-        raise ValueError("单次脚本生成尝试次数只能是 1 或 2")
+    if max_attempts not in (1, 2, 3):
+        raise ValueError("单次脚本生成尝试次数只能是 1、2 或 3")
     shots_data = read_json(project / "shots.json")
     if not shots_data:
         raise FileNotFoundError(f"缺少 shots.json：{project / 'shots.json'}")
@@ -365,6 +394,7 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
         checks.append({"attempt": attempt + 1, "ok": not errors, "errors": errors})
         if not errors:
             break
+        _append_failure(project, settings.model("script"), prompt, raw, errors, attempt + 1)
         if attempt < max_attempts - 1:
             prompt = _prompt(shots_data, facts, terms, format_data, errors, feedback, previous)
     if checks[-1]["errors"]:
@@ -397,8 +427,8 @@ def main(argv=None):
     parser.add_argument("--project", required=True)
     parser.add_argument("--facts", required=True, help="产品事实 JSON 文件或逗号分隔卖点")
     parser.add_argument("--feedback-json", default="", help="人的修改意见 JSON")
-    parser.add_argument("--attempts", type=int, choices=(1, 2), default=2,
-                        help="本次最多调用脚本模型的次数；默认 2")
+    parser.add_argument("--attempts", type=int, choices=(1, 2, 3), default=3,
+                        help="本次最多调用脚本模型的次数；默认 3")
     args = parser.parse_args(argv)
     try:
         feedback = json.loads(args.feedback_json) if args.feedback_json else None

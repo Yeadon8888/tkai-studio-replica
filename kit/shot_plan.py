@@ -227,6 +227,7 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
         "voiceover_lines": [x["voiceover_line"] for x in segments],
         "must_keep": [shot.get("action", "") for shot in shots if shot.get("keep") == "keep"],
         "replication_reference": shots_data.get("source_video_url") or shots_data.get("reference_url"),
+        "replication_reference_file": shots_data.get("source_video_file") or "benchmark/video.mp4",
         "shot_list": "shots.json", "script": "script.json", "scene": str(scene),
         "music": script_data.get("music"),
         "seed": seed, "estimated_cny": round(sum(estimates), 4) if all(x is not None for x in estimates) else None,
