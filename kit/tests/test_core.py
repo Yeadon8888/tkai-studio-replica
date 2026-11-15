@@ -23,7 +23,7 @@ LEGACY_DIM_CAUSES = {
     "product_consistency": {"product_wrong_detail", "product_deformed", "client_requirement_unmet"},
     "person_consistency": {"person_mismatch"},
     "visual_quality": {"motion_artifact", "compliance_fail", "product_deformed", "style_drift"},  # v0.5.0 加入风格跑偏
-    "audio_text": {"keyword_misspoken", "audio_sync"},
+    "audio_text": {"keyword_misspoken", "audio_sync", "audio_unwanted_voice"},
     "pacing_structure": {"pacing_off"},
     "platform_signals": {"weak_hook", "pacing_off"},
     "replication_fidelity": {"replication_mismatch"},

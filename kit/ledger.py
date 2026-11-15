@@ -19,10 +19,12 @@ LEDGER_FILE = LEDGER_DIR / "costs.jsonl"
 PRICES_CNY = {"minimax-H3": 0.13}
 
 
-def estimate_cny(endpoint, units, status, resolution=None):
+def estimate_cny(endpoint, units, status, resolution=None, kind=None):
     """提交行按单位数估算金额；终态行（saved/failed）金额为 0，避免重复计费。"""
     if str(status) in ("saved", "failed"):
         return 0.0
+    if kind == "music":
+        return settings.music_price() if units else None
     price = settings.video_unit_price(endpoint, resolution)
     if price is None and endpoint == settings.model("video"):
         # 旧 .env 只配置 MODEL_VIDEO + VIDEO_PRICE_CNY_PER_SECOND 时继续可用。
@@ -69,7 +71,7 @@ def append(provider, endpoint, status, project="", ref="", units=None, usage=Non
         "units": units,              # 计费单位数（TikHub 为 1 次请求；视频为秒）
         "usage": usage or {},        # 模型 token 用量等
         "resolution": resolution,      # 视频请求的分辨率；旧行没有此字段
-        "estimate_cny": estimate_cny(endpoint, units, status, resolution),  # 估算金额，未知为 None
+        "estimate_cny": estimate_cny(endpoint, units, status, resolution, kind),  # 估算金额，未知为 None
         "kind": kind,                # text | video | search（旧行没有此字段）
     }
     with LEDGER_FILE.open("a", encoding="utf-8") as f:

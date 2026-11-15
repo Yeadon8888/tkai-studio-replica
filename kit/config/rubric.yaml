@@ -10,7 +10,7 @@ dimensions:
   product_consistency: {weight: 0.2125, check: "形状/颜色/材质/关键细节与产品参考图一致；不变形、不无中生有", evidence: [product_wrong_detail, product_deformed, client_requirement_unmet]}
   person_consistency:  {weight: 0.085, check: "同一人物跨镜头一致，与定妆图相符", evidence: [person_mismatch]}
   visual_quality:      {weight: 0.1275, check: "无畸变、闪烁、多余肢体、穿帮；材质物理合理；视觉风格与参考一致（动画/3D/微观/实拍不能跑偏）", evidence: [motion_artifact, compliance_fail, product_deformed, style_drift]}
-  audio_text:          {weight: 0.085, check: "口播清楚、关键词不读错；字幕与口播一致；音画同步", evidence: [audio_sync, keyword_misspoken]}
+  audio_text:          {weight: 0.085, check: "口播清楚、关键词不读错；字幕与口播一致；纯配乐路线无人声", evidence: [audio_sync, audio_unwanted_voice, keyword_misspoken]}
   pacing_structure:    {weight: 0.0425, check: "时长、镜头数、切点与计划相符", evidence: [pacing_off]}
   platform_signals:    {weight: 0.1275, check: "平台信号代理分（启发式，非真实算法）：前3秒留人、节奏换点、结果停留、转化/互动触发、原生感，见 references/platform-signals.md", evidence: [weak_hook, pacing_off]}
   replication_fidelity: {weight: 0.15, check: "与对标逐镜头比较结构顺序、节奏、景别机位、动作、风格与字幕节奏", evidence: [replication_mismatch]}
@@ -35,6 +35,7 @@ causes:
   style_drift:           {stage: glitches, retry_from: generate, fix: "把参考视频的视觉风格逐条写进提示词（渲染方式、材质、光线、镜头感）；去掉与风格冲突的描述；必要时把风格说明放在提示词开头"}
   pacing_off:            {stage: delivery, retry_from: plan, fix: "调整镜头时长与切点，对齐灵魂卡的节奏曲线"}
   audio_sync:            {stage: delivery, retry_from: compose, fix: "按词级时间戳重新对齐字幕/事件；必要时重做配音"}
+  audio_unwanted_voice:  {stage: delivery, retry_from: compose, fix: "丢弃生成视频原生音轨，只铺已核验的原创纯音乐，然后重新听写检查"}
   weak_hook:             {stage: delivery, retry_from: plan, fix: "重写前3秒：第1秒产品清楚入画 + 开口第一句直接说感受/结果；去掉铺垫"}
   compliance_fail:       {stage: glitches, retry_from: plan, fix: "按失败的合规项（C1–C8）逐条修，重新过合规清单"}
   client_requirement_unmet: {stage: consistency, retry_from: plan, fix: "把未满足的甲方要求的 prompt_clause 逐字写进每个镜头提示词；必要时调整人物锚点/参考图（如大码、胸型）再生成"}

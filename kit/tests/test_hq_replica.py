@@ -141,7 +141,7 @@ class ComposeTimeline(unittest.TestCase):
 
             with mock.patch.object(compose, "synthesize_speech", return_value=project / "speech.raw.wav"), \
                     mock.patch.object(compose, "fit_audio", return_value=project / "speech.wav"), \
-                    mock.patch.object(compose, "make_music", return_value=project / "music.wav"), \
+                    mock.patch.object(compose, "make_silence", return_value=project / "silence.wav"), \
                     mock.patch.object(compose, "compose_hypit", side_effect=fake_compose):
                 compose.build(project, brief)
             job = json.loads((project / "jobs" / "take.json").read_text(encoding="utf-8"))

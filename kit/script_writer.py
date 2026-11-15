@@ -24,6 +24,8 @@ NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:\s*[%x×]|\s*[a-zA-Z]+)?", re.I)
 NAMED_PRODUCT = re.compile(
     r"\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Z0-9][A-Za-z0-9&.-]+){0,3})\s+"
     r"([Pp]roduct|[Bb]ottle|[Kk]it|[Ss]trips?)\b")
+NO_VOICE = "No dialogue, no speech, no singing, no voice-over; only quiet natural ambient sound."
+MUSIC_FIELDS = ("mood", "tempo_bpm", "era_style", "instruments", "energy_curve")
 
 
 def _compact_number(value):
@@ -34,11 +36,64 @@ def _facts_text(facts):
     return json.dumps(facts, ensure_ascii=False, sort_keys=True) if not isinstance(facts, str) else facts
 
 
+def _music_reference_terms(shots_data):
+    """从镜头表的 music_sfx 中提取可识别的歌名和人名。"""
+    terms = []
+    for row in shots_data.get("shots") or []:
+        value = str(row.get("music_sfx") or "").strip()
+        terms.extend(re.findall(r"[\"'“”《》]([^\"'“”《》]{2,})[\"'“”《》]", value))
+        terms.extend(re.findall(r"\b(?:by|artist)\s*[:\-]?\s*([A-Z][\w'.-]+(?:\s+[A-Z][\w'.-]+){0,4})", value))
+        terms.extend(re.findall(r"\b(?:[A-Z][\w']+)(?:\s+(?:[A-Z][\w']+|of|the|to|on|a|an)){1,8}\b", value))
+    return list(dict.fromkeys(x.strip().lower() for x in terms if len(x.strip()) >= 2))
+
+
+def _validate_music(script, shots_data):
+    music = script.get("music")
+    if not isinstance(music, dict):
+        return ["music 必须是包含配乐风格的对象"]
+    missing = [field for field in MUSIC_FIELDS if field not in music or music[field] in (None, "", [])]
+    errors = ["music 缺字段：" + ", ".join(missing)] if missing else []
+    if not missing:
+        if isinstance(music["tempo_bpm"], bool) or not isinstance(music["tempo_bpm"], (int, float)) \
+                or float(music["tempo_bpm"]) <= 0:
+            errors.append("music.tempo_bpm 必须是正数")
+        if not isinstance(music["instruments"], list) or not all(
+                isinstance(value, str) and value.strip() for value in music["instruments"]):
+            errors.append("music.instruments 必须是非空字符串列表")
+        for field in ("mood", "era_style", "energy_curve"):
+            if not isinstance(music[field], str):
+                errors.append(f"music.{field} 必须是字符串")
+    blob = json.dumps(music, ensure_ascii=False).lower()
+    if re.search(r"\bin\s+the\s+style\s+of\b|\blike\s+[\w'\-]", blob, re.I):
+        errors.append("music 不得使用 in the style of 或 like <name> 模仿表述")
+    for term in _music_reference_terms(shots_data):
+        if term in blob:
+            errors.append(f"music 不得出现镜头表中的歌名或人名：{term}")
+    return errors
+
+
+def _append_no_voice(script, audio_mode):
+    if audio_mode not in ("music_only", "ambient"):
+        return script
+    result = dict(script)
+    rows = []
+    for row in result.get("shots") or []:
+        item = dict(row)
+        visual = str(item.get("visual_prompt") or "").strip()
+        if not visual.endswith(NO_VOICE):
+            item["visual_prompt"] = f"{visual.rstrip('.')}. {NO_VOICE}"
+        rows.append(item)
+    result["shots"] = rows
+    return result
+
+
 def validate(script, shots_data, facts, competitor_terms=()):
     """返回阻塞错误；不修补模型输出。"""
     errors = []
     if not isinstance(script, dict) or not str(script.get("scene") or "").strip():
         return ["scene 必须是非空英文场景描述"]
+    if shots_data.get("audio_mode") == "music_only":
+        errors.extend(_validate_music(script, shots_data))
     source_shots = shots_data.get("shots") or []
     rows = script.get("shots")
     if not isinstance(rows, list) or len(rows) != len(source_shots):
@@ -145,8 +200,9 @@ voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中�
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
 audio_mode=on_camera_speech 时，必须把每镜完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。
 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
+额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
-只输出 JSON：{{"scene":"...","shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"...","end_state":"..."}}]}}
+只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"...","end_state":"..."}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}
 产品事实：{json.dumps(facts, ensure_ascii=False)}
 镜头表：{json.dumps(shots_data, ensure_ascii=False)}{correction}"""
@@ -177,7 +233,7 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None):
             prompt = _prompt(shots_data, facts, terms, errors)
     if checks[-1]["errors"]:
         raise ValueError("脚本模型两次输出均未通过：" + "；".join(checks[-1]["errors"]))
-    result = dict(parsed)
+    result = _append_no_voice(parsed, shots_data.get("audio_mode"))
     result["generation"] = {"model": settings.model("script"), "prompt_sha256": prompt_hash,
                             "temperature": TEMPERATURE, "raw_outputs": raw_outputs,
                             "validation": checks, "rewrite_count": len(raw_outputs) - 1}

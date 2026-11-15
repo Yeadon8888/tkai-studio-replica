@@ -83,8 +83,20 @@ VIDEO_ASPECT=9:16
 ```
 AUDIO_ROUTE_DEFAULT=auto  # auto | native | tts
 ```
-`auto` 下，`on_camera_speech`、`music_only`、`ambient` 走 H3 原声；`voiceover`、
-`special_voice` 走 TTS。显式覆盖会作用于全部单元，但 first-last 没有可用历史音轨证据时仍降级为 TTS。
+`auto` 下，`on_camera_speech` 走 H3 原声，`voiceover`、`special_voice` 走 TTS。
+`music_only` 固定走 `music`，`ambient` 固定走 `ambient`，不受旧的全局覆盖影响。详见
+[声音路线](audio.md)。
+
+**原创配乐价格**
+```
+MODEL_MUSIC=suno_music_open
+MODEL_AUDIO_CHECK=             # 留空时沿用 MODEL_TEXT（默认 Hydrogen）
+SUNO_MV=chirp-v5
+MUSIC_PRICE_CNY=2.5
+MUSIC_POLL_INTERVAL_SECONDS=20
+MUSIC_MAX_POLLS=180
+```
+`MUSIC_PRICE_CNY` 是每次 Suno 创作请求的人民币预算，不按秒计价。命中本地曲库时为 0 元。
 
 价格表是 JSON，键为公开模型名与基础分辨率，金额单位是人民币元/请求秒：
 ```

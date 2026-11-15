@@ -48,12 +48,19 @@ DEFAULTS = {
     "MODEL_REVISE": "",
     "MODEL_SCRIPT": "",
     "MODEL_ANCHOR": "",
+    "MODEL_AUDIO_CHECK": "",
     "MODEL_VIDEO": "minimax-H3",
     "MODEL_IMAGE": "gpt-image-2",
     "MODEL_TTS": "gemini-3.8-flash-tts",
+    "MODEL_MUSIC": "suno_music_open",
+    "SUNO_MV": "chirp-v5",
     "MODEL_VIDEO_READ_PROBE": "gemini-4-hydrogen,gemini-3.8-flash-low",
     "PROBE_MAX_TOKENS": "3000",
     "AUDIO_ROUTE_DEFAULT": "auto",
+    "MUSIC_PRICE_CNY": "2.5",
+    "MUSIC_MIN_POLL_INTERVAL_SECONDS": "20",
+    "MUSIC_POLL_INTERVAL_SECONDS": "20",
+    "MUSIC_MAX_POLLS": "180",
     # 自动选模白名单；留空 = models.yaml 中全部 policy=allowed 的模型。
     "MODELS_ALLOWED": "",
     # 视频用途路线。MODEL_VIDEO 只作旧配置兼容；默认路线优先读 VIDEO_ROUTE_DEFAULT。
@@ -89,7 +96,7 @@ DEFAULTS = {
     "MEDIA_HOST_REPO": "",         # 你自己的 GitHub 仓库（owner/name），用于临时上传本地视频；必须在 .env 里填写
 }
 SECRET_KEYS = ("TOKENSFACTORY_API_KEY", "TIKHUB_API_KEY")
-TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script", "anchor")
+TEXT_ROLES = ("verify", "breakdown", "draft", "critic", "review", "revise", "script", "anchor", "audio_check")
 
 _cache = None
 
@@ -165,8 +172,8 @@ def get_float(name):
 
 
 def model(role="text"):
-    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/script/video/image/text。"""
-    if role in ("video", "image", "tts"):
+    """各环节用哪个模型。role: verify/breakdown/draft/critic/review/revise/script/video/image/tts/music/text。"""
+    if role in ("video", "image", "tts", "music"):
         return get(f"MODEL_{role.upper()}")
     return get(f"MODEL_{role.upper()}") if role in TEXT_ROLES and get(f"MODEL_{role.upper()}") else get("MODEL_TEXT")
 
@@ -246,6 +253,11 @@ def tts_price():
     return float(value) if value else None
 
 
+def music_price():
+    """一次 Suno 原创配乐创作请求的人民币预算。"""
+    return get_float("MUSIC_PRICE_CNY")
+
+
 def tier_weights():
     out = {}
     for part in get("TIER_WEIGHTS").split(","):
@@ -273,4 +285,5 @@ def skill_version():
 def stamp():
     """写进评审记录与日志的版本戳：之后换了模型或规则，能知道某条结果是用什么跑出来的。"""
     return {"skill": skill_version(), "config": get("CONFIG_VERSION"),
-            "models": {"video": video_route_model("default"), **{r: model(r) for r in TEXT_ROLES}}}
+            "models": {"video": video_route_model("default"), "music": model("music"),
+                       **{r: model(r) for r in TEXT_ROLES}}}

@@ -55,7 +55,7 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 
 ## 高质量逐镜头复刻
 
-`shot_list.py` 按真实切镜输出整体结构、声音类型、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`。出镜说话、纯音乐和环境声默认用 H3 原生音画，出镜台词会写进 `visual_prompt`；画外音和特殊角色音走 TTS。`shot_plan.py` 按连续性合并并在 15 秒边界处分块；没有历史音轨证据的 first-last 接力块自动改走 TTS。`compose.py` 按单元保留原声或混入 TTS，再加字幕和低音量音乐。具体命令见 `references/commands.md`，方法与风险见 `references/long-take.md`。
+`shot_list.py` 按真实切镜输出整体结构、声音类型、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`。出镜说话走 H3 原声，画外音和特殊角色音走 TTS，纯音乐先复用本地曲库、未命中再经预算批准生成 Suno 原创配乐，环境声保留 H3 自然音轨。`shot_plan.py` 按连续性合并并在 15 秒边界处分块；没有历史音轨证据的 first-last 原声接力块自动改走 TTS。`compose.py` 按单元保留原声、混入 TTS 或丢弃原声后铺纯音乐。具体命令见 `references/commands.md`，声音路线见 `references/audio.md`。
 
 ## 流域中台执行机
 

@@ -17,6 +17,7 @@ import settings  # noqa: E402
 import shot_list  # noqa: E402
 
 NO_TEXT = "Do not render captions, letters, numbers, logos or watermarks."
+NO_VOICE = "No dialogue, no speech, no singing, no voice-over; only quiet natural ambient sound."
 
 
 def _duration(shot):
@@ -92,12 +93,19 @@ def _portion(text, part, parts):
 
 
 def audio_route(audio_mode, override=None):
+    # 这两种是镜头表的硬路线，不允许全局旧配置把它们改回人声路线。
+    if audio_mode == "music_only":
+        return "music"
+    if audio_mode == "ambient":
+        return "ambient"
     override = (override or settings.get("AUDIO_ROUTE_DEFAULT")).strip().lower()
     if override not in ("auto", "native", "tts"):
         raise ValueError("AUDIO_ROUTE_DEFAULT 只能是 auto、native 或 tts")
     if override != "auto":
         return override
-    return "tts" if audio_mode in ("voiceover", "special_voice") else "native"
+    if audio_mode in ("voiceover", "special_voice"):
+        return "tts"
+    return "native"
 
 
 def _mean_volume(path):
@@ -164,7 +172,10 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
             timed, cursor = [], 0.0
             for atom, row in zip(chunk, script_rows):
                 part = f" Part {atom['part']} of {atom['parts']}." if atom["parts"] > 1 else ""
-                timed.append(f"{cursor:.1f}-{cursor + atom['duration']:.1f}s:{part} {row['visual_prompt']}")
+                visual = str(row["visual_prompt"]).strip()
+                if shots_data["audio_mode"] in ("music_only", "ambient") and not visual.endswith(NO_VOICE):
+                    visual = f"{visual.rstrip('.')}. {NO_VOICE}"
+                timed.append(f"{cursor:.1f}-{cursor + atom['duration']:.1f}s:{part} {visual}")
                 cursor += atom["duration"]
             prompt = (f"Shared scene: {script_data['scene']}. " + " ".join(timed) + " " + NO_TEXT).strip()
             shot_ids = list(dict.fromkeys(atom["shot"]["id"] for atom in chunk))
@@ -211,6 +222,7 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
         "must_keep": [shot.get("action", "") for shot in shots if shot.get("keep") == "keep"],
         "replication_reference": shots_data.get("source_video_url") or shots_data.get("reference_url"),
         "shot_list": "shots.json", "script": "script.json", "scene": str(scene),
+        "music": script_data.get("music"),
         "seed": seed, "estimated_cny": round(sum(estimates), 4) if all(x is not None for x in estimates) else None,
         "takes": [brief_id],
     }
