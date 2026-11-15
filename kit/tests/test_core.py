@@ -196,7 +196,7 @@ class ProductBudget(unittest.TestCase):
             tmp = Path(tmp)
             products.PRODUCTS = tmp / "products"
             products.QUEUE = products.PRODUCTS / "_queue.json"
-            products.create("p1", "测试品")
+            products.create("p1", "测试品", 5.0)  # 显式传入，避免受本机 .env 的单品上限影响
             products.register_run("p1", "run-a")
             led = tmp / "costs.jsonl"
             led.write_text("\n".join([
