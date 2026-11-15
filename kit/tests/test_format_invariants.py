@@ -164,3 +164,20 @@ class PlatformPayloadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EngineFormatRewriteTest(unittest.TestCase):
+    def test_format_errors_flag_legacy_ad_style_script(self):
+        import script_writer
+        shots = {"audio_mode": "music_only", "shots": [
+            {"id": "S01", "start": 0, "end": 5, "keep": "keep", "caption": None, "voiceover": "",
+             "onscreen_text": "Reply to user1's comment is this safe"}]}
+        legacy = {"scene": "x", "shots": [{"id": "S01", "voiceover": "", "caption": "Testing now",
+                  "onscreen_copy": "Check your water today"}]}
+        errors = script_writer.format_errors(legacy, shots)
+        self.assertIn("字幕有无必须与对标一致", errors)
+        self.assertTrue(any("CTA" in e for e in errors))
+        self.assertTrue(any("屏幕文字形式" in e for e in errors))
+        good = {"scene": "x", "shots": [{"id": "S01", "voiceover": "", "caption": "",
+                "onscreen_copy": {"style": "reply_sticker", "handle": "@sipper_01", "comment": "really?"}}]}
+        self.assertEqual(script_writer.format_errors(good, shots), [])

@@ -364,15 +364,20 @@ def status(product, run=None):
     shots_data = read_json(run_dir / "shots.json", {}) or {}
     script_data = read_json(run_dir / "script.json", {}) or {}
     music_errors = script_writer.music_errors(script_data, shots_data) if script_data else []
-    if music_errors and not early_briefs:
+    format_errors = script_writer.format_errors(script_data, shots_data) if script_data else []
+    if (music_errors or format_errors) and not early_briefs:
         facts = meta.get("anchor") or "<已确认产品事实>"
-        feedback = {"source": "system", "note": "纯音乐脚本缺少合法 music 配乐描述：" + "；".join(music_errors),
-                    "edits": []}
+        notes = []
+        if music_errors:
+            notes.append("纯音乐脚本缺少合法 music 配乐描述：" + "；".join(music_errors))
+        if format_errors:
+            notes.append("旧脚本违反对标形式不变量：" + "；".join(format_errors))
+        feedback = {"source": "system", "note": "；".join(notes), "edits": []}
         result = {**base, "stage": "script", "stage_label": STAGE_LABELS["script"],
                   "action": {"type": "paid", "command": [sys.executable, str(KIT / "script_writer.py"),
                              "--project", str(run_dir), "--facts", facts,
                              "--feedback-json", json.dumps(feedback, ensure_ascii=False)],
-                             "summary": "补写纯音乐脚本的配乐描述并运行代码校验",
+                             "summary": "按系统检查重写脚本（配乐描述/形式不变量）并运行代码校验",
                              "estimated_cny": None, "approval": benchmark_cp["id"]}}
         return _with_manual(result)
     if (run_dir / "script.json").exists():

@@ -543,7 +543,7 @@ class Runner:
         if cp["kind"] == "script" and feedback.get("scriptSha256") == (cp.get("subject") or {}).get("sha256"):
             reason = f"已按意见重写为第 {feedback.get('version', 2)} 版"
         elif cp["kind"] == "script":
-            reason = "系统补写配乐描述"
+            reason = "系统按检查重写脚本（配乐描述或形式不变量）"
         else:
             reason = "预算内容已更新"
         for row in self.client.checkpoints(request_id):

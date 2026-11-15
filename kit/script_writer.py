@@ -109,6 +109,29 @@ def _word_overlap(left, right):
     return len(generated & source) / len(generated) if generated else 0.0
 
 
+def format_errors(script, shots_data):
+    """不依赖产品事实的形式不变量检查；引擎用它判断旧脚本是否需要系统重写。"""
+    rows = script.get("shots") if isinstance(script, dict) else None
+    if not isinstance(rows, list) or not shots_data.get("shots"):
+        return []
+    rows = [row for row in rows if isinstance(row, dict)]
+    format_data = format_invariants.derive(shots_data)
+    errors = []
+    voiced = any(str(row.get("voiceover") or "").strip() for row in rows)
+    if voiced != bool(format_data.get("voice")):
+        errors.append("口播有无必须与对标 audio_mode 一致")
+    captions = any(str(row.get("caption") or "").strip() for row in rows)
+    if captions != bool(format_data.get("captions")):
+        errors.append("字幕有无必须与对标一致")
+    if not format_data.get("cta") and any(format_invariants.has_cta(value)
+                                          for value in format_invariants.script_texts(script)):
+        errors.append("对标无 CTA，脚本不得新增行动号召")
+    actual_style = format_invariants.script_style(script)
+    if actual_style != format_data.get("onscreen_style"):
+        errors.append(f"屏幕文字形式应为 {format_data.get('onscreen_style')}，实际为 {actual_style}")
+    return errors
+
+
 def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
     """返回阻塞错误；不修补模型输出。"""
     errors = []

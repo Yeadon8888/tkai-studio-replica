@@ -539,7 +539,7 @@ class EnginePipelineBudgetTest(RunnerCase):
         checkpoints.resolve(benchmark["id"], "approved", "来自中台请求", "platform-request")
         (products.product_dir("flow") / "plan.json").write_text("{}", encoding="utf-8")
         shots = {"audio_mode": "voiceover", "shots": [{"id": "S01", "start": 0, "end": 10,
-                 "voiceover": "say it"}]}
+                 "voiceover": "say it", "caption": "say it"}]}
         script = {"scene": "A studio", "shots": [{"id": "S01", "visual_prompt": "Exact Product",
                   "voiceover": "say it", "caption": "say it", "onscreen_copy": "",
                   "end_state": "centered"}]}
