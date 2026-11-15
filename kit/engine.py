@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import checkpoints
+import music
 import products
 import settings
 from common import read_json
@@ -16,7 +17,7 @@ KIT = Path(__file__).resolve().parent
 STAGE_LABELS = {
     "product": "产品卡", "benchmark": "对标与档位", "plan": "计划", "shots": "镜头表",
     "script": "脚本", "budget": "预算", "keyframe": "定场图", "generation": "生成",
-    "compose": "合成", "review": "评审",
+    "music": "配乐", "compose": "合成", "review": "评审",
     "verdict": "人工判定", "publish": "发布", "done": "完成",
 }
 
@@ -50,7 +51,7 @@ def _estimate(brief_paths):
 
 
 def _budget_details(brief_paths):
-    """预算必须同时列出视频、定场图与 TTS；任一价格未知时总额保持未知。"""
+    """预算同时列出视频、定场图、TTS 与配乐；任一价格未知时总额保持未知。"""
     units = []
     needs_tts = False
     for path in brief_paths:
@@ -72,6 +73,14 @@ def _budget_details(brief_paths):
                                   "unitPrice": settings.image_price(),
                                   "totalCny": settings.image_price()})
                 needs_tts = needs_tts or segment.get("audio_route", "tts") == "tts"
+            if any(segment.get("audio_route") == "music" for segment in segments):
+                duration = float(brief.get("duration") or sum(float(x.get("duration") or 0) for x in segments))
+                reused = music.pick(brief.get("music"), duration)
+                price = 0.0 if reused else settings.music_price()
+                units.append({"kind": "music", "id": f"music-{brief.get('id', path.stem)}",
+                              "model": "复用曲库" if reused else settings.model("music"),
+                              "duration": duration, "unitPrice": price, "totalCny": price,
+                              "reason": "配乐：复用曲库 0 元" if reused else f"配乐：新生成 {price:g} 元"})
         else:
             units.append({"kind": "video", "id": str(brief.get("id") or path.stem),
                           "model": brief.get("model") or settings.video_route_model(brief.get("video_route", "default")),
@@ -416,6 +425,31 @@ def status(product, run=None):
             continue
         brief = next((path for path in briefs if path.stem == take), briefs[0])
         brief_data = read_json(brief, {}) or {}
+        needs_music = any(row.get("audio_route") == "music" for row in brief_data.get("segments") or [])
+        music_job = read_json(run_dir / "jobs" / f"music-{brief_data.get('id', brief.stem)}.json", {}) or {}
+        if needs_music and music_job.get("status") not in ("reused", "saved"):
+            if music_job.get("status") in ("FAILURE", "submit_unknown", "insufficient"):
+                result = {**base, "stage": "music", "stage_label": STAGE_LABELS["music"],
+                          "action": {"type": "human", "summary": music_job.get("reason") or music_job.get("fail_reason") or
+                                     "配乐任务无法自动继续，请查看回执后决定",
+                                     "command": f"查看 jobs/music-{brief_data.get('id', brief.stem)}.json"}}
+                return _with_manual(result)
+            duration = float(brief_data.get("duration") or sum(
+                float(x.get("duration") or 0) for x in brief_data.get("segments") or []))
+            reused = music.pick(brief_data.get("music"), duration)
+            resuming = bool(music_job.get("task_id"))
+            action_type = "local" if reused or resuming else "paid"
+            action = {"type": action_type,
+                      "command": [sys.executable, str(KIT / "music.py"), "--project", str(run_dir),
+                                  "--brief", str(brief)],
+                      "summary": ("复用曲库配乐后停止" if reused else
+                                  "继续查询已提交的 Suno 配乐任务" if resuming else
+                                  "生成一首 Suno 原创配乐后停止"),
+                      "estimated_cny": 0.0 if reused or resuming else settings.music_price()}
+            if action_type == "paid":
+                action["approval"] = budget_cp["id"]
+            result = {**base, "stage": "music", "stage_label": STAGE_LABELS["music"], "action": action}
+            return _with_manual(result)
         needs_tts = any(row.get("audio_route", "tts") == "tts"
                         for row in brief_data.get("segments") or [])
         refs = _registered_references(meta)

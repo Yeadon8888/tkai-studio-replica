@@ -132,12 +132,21 @@ def fit_audio(source, output, duration):
     return output
 
 
-def make_music(output, duration):
-    """生成无版权的轻量环境音床，确切文案仍由口播承担。"""
+def make_silence(output, duration):
+    """仅作为无配乐路线的技术性空音轨，不伪装成音乐。"""
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-                    "sine=frequency=196:sample_rate=48000", "-filter:a",
-                    "volume=0.035,lowpass=f=900,afade=t=in:st=0:d=0.4,afade=t=out:st="
-                    f"{max(0.0, duration - 0.6):.3f}:d=0.6", "-t", f"{duration:.3f}", str(output)], check=True)
+                    "anullsrc=r=48000:cl=stereo", "-t", f"{duration:.3f}", str(output)], check=True)
+    return output
+
+
+def fit_music(source, output, duration):
+    """裁切原创配乐，做首尾淡入淡出并统一到约 -16 LUFS。"""
+    fade_out = max(0.0, float(duration) - 0.8)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-filter:a",
+                    f"atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
+                    f"afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out:.3f}:d=0.8,"
+                    "loudnorm=I=-16:TP=-1.5:LRA=11", "-t", f"{duration:.3f}",
+                    "-ar", "48000", "-ac", "2", str(output)], check=True)
     return output
 
 
@@ -275,10 +284,11 @@ def compose_ffmpeg(source_video, voice, music, rows, output, workdir):
     srt.write_text(srt_text(rows), encoding="utf-8")
     escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(voice), "-i", str(music),
-                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[1:a][2:a]amix=inputs=2:duration=longest[a]",
+                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[2:a]volume=0.12[music];"
+                    "[1:a][music]amix=inputs=2:duration=longest[a]",
                     "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
                     "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
-    return {"engine": "ffmpeg", "reason": "Hypit 不可用或执行失败"}
+    return {"engine": "ffmpeg", "reason": "Hypit 不可用或执行失败", "music_gain": 0.12}
 
 
 def compose_native(source_video, music, rows, output, workdir):
@@ -295,6 +305,20 @@ def compose_native(source_video, music, rows, output, workdir):
                     "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
                     "-movflags", "+faststart", "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
     return {"engine": "ffmpeg-native", "native_mean_volume_db": loudness, "music_gain": 0.12}
+
+
+def compose_music(source_video, music, rows, output, workdir):
+    """纯配乐路线显式丢弃 H3 原生音轨，只铺已核验的配乐。"""
+    if not music or not Path(music).is_file():
+        raise FileNotFoundError("纯配乐路线没有可用配乐，已停止合成")
+    srt = Path(workdir) / "captions.srt"
+    srt.write_text(srt_text(rows), encoding="utf-8")
+    escaped = str(srt).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_video), "-i", str(music),
+                    "-filter_complex", f"[0:v]subtitles='{escaped}'[v];[1:a]anull[a]",
+                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac",
+                    "-movflags", "+faststart", "-t", f"{rows[-1]['end']:.3f}", str(output)], check=True)
+    return {"engine": "ffmpeg-music", "source_audio": "discarded", "music_lufs": -16}
 
 
 def compose_mixed(source_video, voice, music, rows, segments, output, workdir):
@@ -344,13 +368,23 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
     raw = project / "takes" / f"{take_id}.raw.mp4"
     if not raw.exists():
         shutil.copy2(source, raw)
-    music = make_music(work / "music.wav", rows[-1]["end"])
     output = project / "takes" / f"{take_id}.composed.mp4"
     routes = {str(x.get("audio_route") or "tts") for x in brief.get("segments") or []}
     segments = brief.get("segments") or []
-    if routes == {"native"}:
-        info = compose_native(raw, music, rows, output, work)
+    music_job = read_json(project / "jobs" / f"music-{take_id}.json", {}) or {}
+    selected_music = Path(music_job.get("file")) if music_job.get("file") else None
+    if routes == {"music"}:
+        if not selected_music or not selected_music.is_file():
+            raise FileNotFoundError("纯配乐路线没有可用配乐，已停止合成")
+        music = fit_music(selected_music, work / "music.wav", rows[-1]["end"])
+        info = compose_music(raw, music, rows, output, work)
     else:
+        music = (fit_music(selected_music, work / "music.wav", rows[-1]["end"])
+                 if selected_music and selected_music.is_file()
+                 else make_silence(work / "silence.wav", rows[-1]["end"]))
+    if routes in ({"native"}, {"ambient"}):
+        info = compose_native(raw, music, rows, output, work)
+    elif routes != {"music"}:
         speech_raw = synthesize_speech(project, " ".join(
             row["caption"] for row, segment in zip(rows, brief.get("segments") or [])
             if segment.get("audio_route", "tts") == "tts"), work / "voiceover.raw.wav", voice)

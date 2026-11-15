@@ -121,6 +121,13 @@ def machine_checks(video, brief):
         cursor += duration
     if native_loudness:
         facts["native_loudness"] = native_loudness
+    music_route = any(row.get("audio_route") == "music" for row in brief.get("segments") or [])
+    transcript = str(brief.get("hydrogen_transcript") or brief.get("audio_transcript") or "").strip()
+    if music_route:
+        facts["music_voice_check"] = {"model": settings.model("audio_check"),
+                                      "transcript": transcript, "voice_detected": bool(transcript)}
+        if transcript:
+            blocking.append("纯配乐路线听写到人声（cause: audio_unwanted_voice）")
     return {"blocking": blocking, "info": info, "facts": facts}
 
 
@@ -323,6 +330,12 @@ AUDIO_NONE = "简报没有口播或台词：确认没有意外人声；没有则
 
 
 def audio_rule(brief, audio_available=True):
+    if any(row.get("audio_route") == "music" for row in brief.get("segments") or []):
+        if not audio_available:
+            return ("纯配乐路线不应出现人声，但当前抽帧无法听声音：audio_text 给 7 分，"
+                    "写 cause=audio_unwanted_voice 的 issue 并标明需人工听取。")
+        return ("这是纯配乐路线：必须完整听取，不应有对话、口播、歌唱或任何可辨人声。"
+                "一旦听到人声，audio_text 判失败并写 cause=audio_unwanted_voice。")
     voiceover = brief.get("voiceover")
     lines = brief.get("voiceover_lines") or []
     if not voiceover and not lines:
@@ -336,6 +349,22 @@ def audio_rule(brief, audio_available=True):
             "台词是否与简报一致、字幕是否与口播一致。"
             f"简报口播要求：{expected or '（见台词）'}；台词：{line_text or '（未逐句列出）'}。"
             "不一致时写 issue，cause=audio_sync；关键词读错可用 cause=keyword_misspoken。")
+
+
+def unwanted_voice_check(video_url, project_name, take):
+    """用配置的 Hydrogen 视频理解模型听写纯配乐成片中的人声。"""
+    prompt = ("完整听取这条视频的声音。只检查是否存在人类对话、口播、歌唱或可辨语音；"
+              "乐器、环境声和无语义非人声不算。只输出 JSON："
+              '{"voice_detected":false,"transcript":""}。如果听到人声，voice_detected=true，'
+              "transcript 写出能辨认的最短片段；听不清但能确认是人声时写 [unintelligible]。")
+    raw = loop.gemini([{"type": "text", "text": prompt}, {"type": "video_url", "video_url": video_url}],
+                      project=project_name, ref=f"{take}:audio-voice-check",
+                      max_tokens=800, temperature=0, role="audio_check")
+    result = parse_json(raw, require=("voice_detected", "transcript"))
+    if not isinstance(result, dict) or not isinstance(result.get("voice_detected"), bool):
+        raise ValueError("纯配乐人声听写结果无效")
+    return {"model": settings.model("audio_check"), "voice_detected": result["voice_detected"],
+            "transcript": str(result.get("transcript") or "").strip()}
 
 
 def must_keep_text(brief):
@@ -581,9 +610,19 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
     reference_url = brief.get("replication_reference")
     if reference_url and not _reachable(reference_url):
         reference_url = None
+    voice_block = None
     try:
-        judges, failed, not_ingested = _run_panel(cfg, project, output_take, brief, anchor, refs_p, video_url, frames,
-                                                  reference_url)
+        if video_url and any(row.get("audio_route") == "music" for row in brief.get("segments") or []):
+            voice_check = unwanted_voice_check(video_url, project.name, output_take)
+            mc["facts"]["music_voice_check"] = voice_check
+            if voice_check["voice_detected"]:
+                voice_block = "纯配乐路线听写到人声（cause: audio_unwanted_voice）"
+                mc["blocking"].append(voice_block)
+        if voice_block:
+            judges, failed, not_ingested = [], [], False
+        else:
+            judges, failed, not_ingested = _run_panel(cfg, project, output_take, brief, anchor, refs_p, video_url, frames,
+                                                      reference_url)
         if not_ingested and settings.get("MEDIA_UPLOAD") != "off":
             # 模型没读到视频：作废这一轮，改用抽帧重评，并记下原因（抽帧听不到声音，口播判为需人工听）
             print(f"{take} 模型没有读到视频，改用抽帧重评")
@@ -606,6 +645,12 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
                                          "deleted": deleted, "delete_error": error})
             if not deleted:
                 print(f"{take} 临时媒体删除未确认，请检查 media_log.jsonl")
+    if voice_block:
+        decision = {"attempt": attempt, "decision": "repair", "stage": "delivery", "retry_from": "compose",
+                    "reason": "机器检查未通过：" + voice_block,
+                    "weighted": None, "low_dimensions": ["audio_text"], "vetoes": []}
+        _save_review(project, output_take, take, record, decision)
+        return decision
     if failed:
         record["expert_failures"] = failed
         decision = {"attempt": attempt, "decision": None,
