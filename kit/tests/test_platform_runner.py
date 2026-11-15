@@ -231,6 +231,27 @@ class RunnerCase(unittest.TestCase):
         cp = checkpoints.create("p1", run.name, "script", "确认脚本", subject)
         return run, cp
 
+    def _sticker_checkpoint(self):
+        products.create("p1", "Exact Product", 5, "Exact Product bottle")
+        run = products.new_run("p1", "sticker", date="20261114")
+        shots = {"duration": 4, "audio_mode": "music_only",
+                 "structure": [{"beat": "钩子", "start": 0, "end": 4}],
+                 "shots": [{"id": "S01", "start": 0, "end": 4, "keep": "keep",
+                            "voiceover": "", "caption": "",
+                            "onscreen_text": "Reply to real_user's comment is this safe to drink"}]}
+        script = {"scene": "A bright kitchen", "music": {
+                    "mood": "curious", "tempo_bpm": 72, "era_style": "modern",
+                    "instruments": ["piano"], "energy_curve": "steady"},
+                  "shots": [{"id": "S01", "visual_prompt": "A hand holds a bottle",
+                             "voiceover": "", "caption": "", "onscreen_copy": {
+                                 "style": "reply_sticker", "handle": "@guest_one",
+                                 "comment": "Would this water pass a safety test?"},
+                             "end_state": "Bottle centered"}]}
+        (run / "shots.json").write_text(json.dumps(shots), encoding="utf-8")
+        (run / "script.json").write_text(json.dumps(script), encoding="utf-8")
+        subject = {"script": str((run / "script.json").relative_to(self.home)), "sha256": "sticker"}
+        return run, checkpoints.create("p1", run.name, "script", "确认贴纸脚本", subject)
+
     def test_budget_over_product_limit_reports_failed(self):
         state = {"request": self._request(5.01), "phase": "claimed", "checkpointMap": {}}
         result = self.runner.process(state)
@@ -325,6 +346,41 @@ class RunnerCase(unittest.TestCase):
         self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
         saved = checkpoints.get(cp["id"])
         self.assertEqual([row["field"] for row in saved["edits"]], ["caption", "onscreen_copy"])
+
+    def test_reply_sticker_object_edit_passes_and_keeps_object(self):
+        run, cp = self._sticker_checkpoint()
+        sticker = {"style": "reply_sticker", "handle": "@guest_two",
+                   "comment": "Could this be useful after a storm?"}
+        self.client.remote = [{"externalId": cp["id"], "status": "approved",
+                               "decisionNote": "贴纸已修改", "decidedBy": "user-1",
+                               "edits": {"segments": [{"index": 0, "onscreenCopy": sticker}]}}]
+        state = {"request": self._request(), "checkpointMap": {cp["id"]: cp["id"]}}
+        self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
+        saved = json.loads((run / "script.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["shots"][0]["onscreen_copy"], sticker)
+        self.assertEqual(checkpoints.get(cp["id"])["edits"][0]["after"], sticker)
+
+    def test_reply_sticker_string_edit_is_rejected_and_reported(self):
+        run, cp = self._sticker_checkpoint()
+        self.client.remote = [{"externalId": cp["id"], "status": "approved",
+                               "decisionNote": "改成普通文字", "decidedBy": "user-1",
+                               "edits": {"segments": [{"index": 0, "onscreenCopy": "ordinary text"}]}}]
+        state = {"request": self._request(), "checkpointMap": {cp["id"]: cp["id"]}}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertIn("reply_sticker 对象", self.client.created[-1]["payload"]["validationError"])
+        saved = json.loads((run / "script.json").read_text(encoding="utf-8"))
+        self.assertIsInstance(saved["shots"][0]["onscreen_copy"], dict)
+
+    def test_copied_reference_comment_is_rejected_and_reported(self):
+        run, cp = self._sticker_checkpoint()
+        copied = {"style": "reply_sticker", "handle": "@guest_two",
+                  "comment": "is this safe to drink"}
+        self.client.remote = [{"externalId": cp["id"], "status": "approved",
+                               "decisionNote": "修改评论", "decidedBy": "user-1",
+                               "edits": {"segments": [{"index": 0, "onscreenCopy": copied}]}}]
+        state = {"request": self._request(), "checkpointMap": {cp["id"]: cp["id"]}}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertIn("重合率超过 60%", self.client.created[-1]["payload"]["validationError"])
 
     def test_contract_edits_reject_unknown_fields(self):
         with self.assertRaisesRegex(ValueError, "未知字段"):

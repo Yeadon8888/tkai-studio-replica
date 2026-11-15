@@ -149,17 +149,28 @@ class PreviewParityTest(unittest.TestCase):
 
 
 class PlatformPayloadTest(unittest.TestCase):
-    def test_optional_format_and_preview_are_reported(self):
+    def test_checkpoint_payload_calculates_and_reports_preview(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             (run / "shots.json").write_text(json.dumps(c023()), encoding="utf-8")
             (run / "script.json").write_text(json.dumps(valid_script()), encoding="utf-8")
-            (run / "format.json").write_text(json.dumps({"description": "对标无字幕；无 CTA"}), encoding="utf-8")
-            (run / "essence_preview.json").write_text(json.dumps({"score": 1.0, "items": [
-                {"label": "字幕有无", "status": "pass", "detail": "一致"}]}), encoding="utf-8")
-            payload = platform_runner._script_payload(run)
-        self.assertEqual(payload["format"], "对标无字幕；无 CTA")
+            (run / "product_state.json").write_text(json.dumps(FACTS["product_state"]), encoding="utf-8")
+            payload = platform_runner._checkpoint_payload({"kind": "script"}, run)
+            saved = json.loads((run / "essence_preview.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["format"], format_invariants.derive(c023())["description"])
         self.assertEqual(payload["essencePreview"]["items"][0]["label"], "字幕有无")
+        self.assertEqual(payload["essencePreview"]["passCount"], saved["pass_count"])
+        self.assertEqual(payload["essencePreview"]["total"], saved["total"])
+
+    def test_preview_failure_does_not_interrupt_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "shots.json").write_text(json.dumps(c023()), encoding="utf-8")
+            (run / "script.json").write_text(json.dumps(valid_script()), encoding="utf-8")
+            with mock.patch.object(platform_runner.essence, "preview", side_effect=ValueError("缺少预估输入")):
+                payload = platform_runner._checkpoint_payload({"kind": "script"}, run)
+        self.assertIsNone(payload["essencePreview"])
+        self.assertEqual(payload["essencePreviewError"], "神韵预估失败：缺少预估输入")
 
 
 if __name__ == "__main__":

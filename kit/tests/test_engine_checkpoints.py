@@ -15,6 +15,7 @@ import engine  # noqa: E402
 import human  # noqa: E402
 import products  # noqa: E402
 import settings  # noqa: E402
+import studio  # noqa: E402
 
 
 class StudioCase(unittest.TestCase):
@@ -36,6 +37,15 @@ class StudioCase(unittest.TestCase):
 
 
 class CheckpointRules(StudioCase):
+    def test_edit_script_cli_accepts_json_object_value(self):
+        sticker = {"style": "reply_sticker", "handle": "@guest_two", "comment": "Could this work?"}
+        with mock.patch.object(checkpoints, "resolve", return_value={"product": "p1"}) as resolve:
+            code = studio.main(["edit-script", "cp-script-test", "--segment", "1",
+                                "--field", "onscreen_copy", "--json-value", json.dumps(sticker),
+                                "--by", "tester"])
+        self.assertEqual(code, 0)
+        self.assertEqual(resolve.call_args.args[4][0]["value"], sticker)
+
     def test_six_kinds_are_idempotent(self):
         for kind in checkpoints.KINDS:
             with self.subTest(kind=kind):

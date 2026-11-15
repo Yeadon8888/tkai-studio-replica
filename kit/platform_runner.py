@@ -18,6 +18,7 @@ sys.path.insert(0, str(KIT))
 
 import checkpoints  # noqa: E402
 import engine  # noqa: E402
+import essence  # noqa: E402
 import intake  # noqa: E402
 import loop  # noqa: E402
 import products  # noqa: E402
@@ -128,6 +129,8 @@ def _script_payload(run_dir):
     if "score" in preview:
         payload["essencePreview"] = {
             "score": preview["score"],
+            "passCount": preview.get("pass_count", 0),
+            "total": preview.get("total", len(preview.get("items") or [])),
             "items": [{"label": row.get("label") or row.get("id") or "未命名项",
                        "status": row.get("status") or "unclear", "detail": row.get("detail") or ""}
                       for row in preview.get("items") or []],
@@ -169,6 +172,13 @@ def _budget_payload(subject, request_budget_cny):
 
 def _checkpoint_payload(row, run_dir, request_budget_cny=None):
     if row["kind"] == "script":
+        try:
+            essence.preview(run_dir)
+        except Exception as exc:  # 预估仅辅助人工判断，失败不能阻断节点上报。
+            payload = _script_payload(run_dir)
+            payload["essencePreview"] = None
+            payload["essencePreviewError"] = f"神韵预估失败：{exc}"
+            return payload
         return _script_payload(run_dir)
     if row["kind"] == "budget":
         return _budget_payload(row.get("subject") or {}, request_budget_cny)

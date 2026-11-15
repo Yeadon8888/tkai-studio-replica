@@ -26,3 +26,7 @@
 
 - `format`：字符串。由 `format.json` 生成的中文形式说明，例如“对标无字幕；对标无人声；钩子是回复评论贴纸（出现在 S01）；无 CTA；品名出现 0 次”。
 - `essencePreview`：`{"score":1.0,"items":[{"label":"字幕有无","status":"pass","detail":"..."}]}`。`score` 是付费前纯代码预估分；`items` 使用中文标签，`status` 为 `pass | fail | unclear`。
+
+补充约定：脚本 payload 的 `segments[].onscreenCopy` 可以是字符串，也可以是 `{"style":"reply_sticker","handle":"@x","comment":"..."}`。中台回传的 `edits.segments[].onscreenCopy` 类型相同；传对象时 `style` 必须保持为 `reply_sticker`，执行机映射到本地 `onscreen_copy` 后仍会执行完整脚本校验。
+
+`essencePreview` 的完整上报结构为 `{"score":0.0,"passCount":0,"total":0,"items":[{"label":"字幕有无","status":"pass","detail":"..."}]}`。`score` 范围为 0–1，`passCount` 是通过项数量，`total` 是总项数；本地 `essence_preview.json` 中对应字段名为 `pass_count` 和 `total`。预估失败时执行机上报 `essencePreview: null`，并在 `essencePreviewError` 写中文原因，脚本节点仍正常创建。
