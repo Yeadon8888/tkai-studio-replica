@@ -3,6 +3,7 @@
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,12 +31,33 @@ PROMPT = """你是短视频导演。完整观看并听完给出的对标视频�
 第一个镜头的 join 必须是 cut。continuous 只用于同一连续镜头被时间边界分段、画面本身没有切镜；match_cut 是动作匹配切。
 """
 
+
+def breakdown_prompt(target_duration=None):
+    if target_duration is None:
+        return PROMPT
+    value = float(target_duration)
+    if value <= 0:
+        raise ValueError("目标时长必须大于 0 秒")
+    return PROMPT + f"""
+
+本次成片目标时长是 {value:g} 秒，与对标原时长不同。先完整理解对标，再压缩为精确 {value:g} 秒的镜头表：
+- 保留原叙事节拍顺序、钩子、证明和行动逻辑，删除重复或次要内容。
+- duration 必须精确为 {value:g}，structure 和 shots 的时间轴都从 0 连续覆盖到 {value:g}。
+- 镜头仍以对标中实际切镜为依据；被删除的内容不要伪造新切镜。
+"""
+
 REQUIRED = ("id", "start", "end", "scale", "camera", "action", "onscreen_text",
             "voiceover", "music_sfx", "rhythm", "hook_reason", "join", "keep",
             "redo_reason", "end_state")
 JOINS = ("cut", "continuous", "match_cut")
 KEEP = ("keep", "redo")
 AUDIO_MODES = ("on_camera_speech", "voiceover", "special_voice", "music_only", "ambient")
+
+
+def all_speech_is_on_camera(data):
+    """有口播的镜头中，说话者是否全部可见。这比声线是否特殊更能决定原声路线。"""
+    voiced = [row for row in data.get("shots") or [] if str(row.get("voiceover") or "").strip()]
+    return bool(voiced) and all(bool(row.get("speaker_on_screen")) for row in voiced)
 
 
 def research_batch(project, shots=None, explicit=None):
@@ -206,20 +228,62 @@ def candidate_source(batch, candidate_id, reachable=tt.media_reachable):
     return candidate, source
 
 
-def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.media_reachable):
+def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.media_reachable,
+          target_duration=None, upload=None, delete=None, media_log=None):
     project, batch = Path(project), Path(batch)
-    candidate, source = candidate_source(batch, candidate_id, reachable)
-    text = model_call([{"type": "text", "text": PROMPT}, {"type": "video_url", "video_url": source}],
-                      project=project.name, ref=f"{candidate_id}:shots", max_tokens=5000,
-                      temperature=0.1, role="breakdown")
+    candidate = _candidate(batch, candidate_id)
+    if not candidate:
+        raise SystemExit(f"调研批次里没有 {candidate_id}")
+    uploaded = None
+    media_status = {"aweme_id": candidate.get("aweme_id"), "candidate_id": candidate_id,
+                    "source": "local" if candidate.get("local_file") else "url"}
+    if candidate.get("local_file"):
+        media_host = __import__("media_host")
+        upload = upload or media_host.upload
+        delete = delete or media_host.delete
+        media_log = media_log or media_host.log
+        uploaded = upload(candidate["local_file"])
+        source = uploaded["url"]
+        media_status["uploaded_url"] = source
+    else:
+        candidate, source = candidate_source(batch, candidate_id, reachable)
+    try:
+        text = model_call([{"type": "text", "text": breakdown_prompt(target_duration)},
+                           {"type": "video_url", "video_url": source}],
+                          project=project.name, ref=f"{candidate_id}:shots", max_tokens=5000,
+                          temperature=0.1, role="breakdown")
+    finally:
+        if uploaded is not None:
+            try:
+                media_status["deleted"] = bool(delete(uploaded))
+            except Exception as exc:
+                media_status.update(deleted=False, delete_error=str(exc)[:200])
+            if media_log:
+                media_log(uploaded, media_status)
+    if uploaded is not None and media_status.get("deleted") is not True:
+        raise RuntimeError("本地对标临时文件未确认删除，已停止写入镜头表")
     parsed = tt.parse_json_obj(text)
     if parsed is None:
         raise ValueError("镜头拆解输出不是 JSON 对象")
     result = validate(parsed)
+    if target_duration is not None and abs(result["duration"] - float(target_duration)) > 0.08:
+        raise ValueError(f"镜头表时长 {result['duration']:g} 与目标 {float(target_duration):g} 不一致")
     result.update(candidate_id=candidate_id, aweme_id=candidate.get("aweme_id"),
                   reference_url=candidate.get("url") or source, source_video_url=source)
+    reference_duration = candidate.get("duration_s") or candidate.get("duration")
+    if reference_duration is None and candidate.get("local_file"):
+        reference_duration = subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=nw=1:nk=1", candidate["local_file"],
+        ], text=True).strip()
+    if reference_duration is not None:
+        result["reference_duration"] = float(reference_duration)
+    if target_duration is not None:
+        result["target_duration"] = float(target_duration)
     result.update(research_batch=str(batch.resolve()), reference_author=candidate.get("author") or "",
                   reference_title=candidate.get("title") or candidate.get("desc") or "")
+    if uploaded is not None:
+        result.update(source="local_upload_whole_video", media_deleted=True)
     result["benchmark_media"] = copy_benchmark_media(project, result, batch)
     write_json(project / "shots.json", result)
     return result
@@ -230,8 +294,9 @@ def main(argv=None):
     parser.add_argument("--project", required=True)
     parser.add_argument("--batch", required=True)
     parser.add_argument("--id", required=True)
+    parser.add_argument("--target-duration", type=float, help="目标成片时长（秒），可与对标不同")
     args = parser.parse_args(argv)
-    result = build(args.project, args.batch, args.id)
+    result = build(args.project, args.batch, args.id, target_duration=args.target_duration)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

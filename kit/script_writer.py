@@ -171,7 +171,7 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
             errors.append(f"{sid} visual_prompt 不能为空")
         elif VISUAL_TEXT.search(visual):
             errors.append(f"{sid} visual_prompt 要求渲染文字、logo 或字幕")
-        if shots_data.get("audio_mode") == "on_camera_speech" and voice:
+        if shot.get("speaker_on_screen") and voice:
             required = f"The person says in English, in a "
             if required.lower() not in visual.lower() or voice.lower() not in visual.lower():
                 errors.append(f"{sid} 出镜口播必须把完整台词和语气写进 visual_prompt")
@@ -300,8 +300,8 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
-audio_mode=on_camera_speech 时，必须把每镜完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。
-voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
+镜头的 speaker_on_screen=true 且 voiceover 非空时，必须把完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。只有说话者不在画面中时才是画外音。
+speaker_on_screen=false 的 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
 只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"..."}}]}}
@@ -340,8 +340,10 @@ def _archive_legacy(project, shots_data, facts, terms, format_data):
     return current, (versions[-1][0] if versions else 0)
 
 
-def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=None):
+def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=None, max_attempts=2):
     project = Path(project)
+    if max_attempts not in (1, 2):
+        raise ValueError("单次脚本生成尝试次数只能是 1 或 2")
     shots_data = read_json(project / "shots.json")
     if not shots_data:
         raise FileNotFoundError(f"缺少 shots.json：{project / 'shots.json'}")
@@ -353,7 +355,7 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
     prompt = _prompt(shots_data, facts, terms, format_data, feedback=feedback, previous=previous)
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     parsed = None
-    for attempt in range(2):
+    for attempt in range(max_attempts):
         raw = model_call([{"type": "text", "text": prompt}], project=project.name,
                          ref=f"script:{attempt + 1}", max_tokens=8000,
                          temperature=TEMPERATURE, role="script")
@@ -363,10 +365,11 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
         checks.append({"attempt": attempt + 1, "ok": not errors, "errors": errors})
         if not errors:
             break
-        if attempt == 0:
+        if attempt < max_attempts - 1:
             prompt = _prompt(shots_data, facts, terms, format_data, errors, feedback, previous)
     if checks[-1]["errors"]:
-        raise ValueError("脚本模型两次输出均未通过：" + "；".join(checks[-1]["errors"]))
+        raise ValueError(f"脚本模型本次 {len(checks)} 次输出均未通过：" +
+                         "；".join(checks[-1]["errors"]))
     result = _append_no_voice(parsed, shots_data.get("audio_mode"))
     result["generation"] = {"model": settings.model("script"), "prompt_sha256": prompt_hash,
                             "temperature": TEMPERATURE, "raw_outputs": raw_outputs,
@@ -394,10 +397,13 @@ def main(argv=None):
     parser.add_argument("--project", required=True)
     parser.add_argument("--facts", required=True, help="产品事实 JSON 文件或逗号分隔卖点")
     parser.add_argument("--feedback-json", default="", help="人的修改意见 JSON")
+    parser.add_argument("--attempts", type=int, choices=(1, 2), default=2,
+                        help="本次最多调用脚本模型的次数；默认 2")
     args = parser.parse_args(argv)
     try:
         feedback = json.loads(args.feedback_json) if args.feedback_json else None
-        result = build(args.project, _parse_facts(args.facts), feedback=feedback)
+        result = build(args.project, _parse_facts(args.facts), feedback=feedback,
+                       max_attempts=args.attempts)
     except ValueError as exc:
         raise SystemExit(f"脚本校验失败，已停止：{exc}") from None
     print(json.dumps({"script": str(Path(args.project) / "script.json"),

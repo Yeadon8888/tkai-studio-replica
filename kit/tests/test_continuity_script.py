@@ -110,6 +110,17 @@ class ScriptBlockingValidation(unittest.TestCase):
             self.assertEqual(history[0]["version"], 1)
             self.assertTrue(history[0]["validation"]["ok"])
 
+    def test_single_attempt_limit_does_not_call_model_twice(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "shots.json").write_text(json.dumps(self.source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "本次 1 次输出均未通过"):
+                script_writer.build(project, ["16 parameters"],
+                                    model_call=lambda *_a, **_k: calls.append(1) or "{}",
+                                    terms=[], max_attempts=1)
+        self.assertEqual(len(calls), 1)
+
     def test_feedback_prompt_versions_legacy_script_and_records_opinion(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)

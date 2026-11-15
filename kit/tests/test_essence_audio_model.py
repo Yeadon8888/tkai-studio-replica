@@ -88,7 +88,26 @@ class AudioRouteTest(unittest.TestCase):
         self.assertEqual(shot_plan.audio_route("on_camera_speech", "auto"), "native")
         self.assertEqual(shot_plan.audio_route("voiceover", "auto"), "tts")
 
-    def test_first_last_native_falls_back_to_tts(self):
+    def test_visible_special_voice_uses_native_and_embeds_dialogue(self):
+        import format_invariants
+        import script_writer
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = Path(tmp) / "scene.png"; ref = Path(tmp) / "ref.jpg"; ref.write_bytes(b"x")
+            data = shots("special_voice")
+            script = {"scene": "kitchen", "shots": [
+                {"id": "S01", "visual_prompt": "The person says in English, in a playful tone: 'Try it now'",
+                 "voiceover": "Try it now", "caption": "Try it now", "onscreen_copy": "", "end_state": "up"},
+                {"id": "S02", "visual_prompt": "hand moves", "voiceover": "",
+                 "caption": "Result", "onscreen_copy": "", "end_state": "down"}]}
+            facts = {"product_anchor": "test strips", "confirmed_selling_points": []}
+            self.assertFalse(any("出镜口播" in error
+                                 for error in script_writer.validate(script, data, facts)))
+            prompt = script_writer._prompt(data, facts, [], format_invariants.derive(data))
+            self.assertIn("speaker_on_screen=false 的 voiceover、special_voice", prompt)
+            plan = shot_plan.make_plan(data, script, [ref], scene_path=scene, seed=1)
+        self.assertTrue(all(row["audio_route"] == "native" for row in plan["segments"]))
+
+    def test_on_camera_match_cut_uses_independent_native_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
             scene = Path(tmp) / "scene.png"; scene.write_bytes(b"x")
             ref = Path(tmp) / "ref.jpg"; ref.write_bytes(b"x")
@@ -100,9 +119,10 @@ class AudioRouteTest(unittest.TestCase):
                  "caption": "Result", "onscreen_copy": "", "end_state": "down"}]}
             plan = shot_plan.make_plan(data, script, [ref], scene_path=scene, seed=1,
                                        first_last_audio={"usable": False, "reason": "无历史证据"})
-        keyframe = next(x for x in plan["segments"] if x["video_route"] == "keyframe")
-        self.assertEqual(keyframe["audio_route"], "tts")
-        self.assertEqual(keyframe["audio_route_reason"], "无历史证据")
+        second = plan["segments"][1]
+        self.assertEqual((second["video_route"], second["audio_route"]), ("quality", "native"))
+        self.assertEqual(second["join_strategy"], "hard_cut_for_native_audio")
+        self.assertNotIn("first_frame", second)
 
     def test_native_compose_keeps_source_audio_and_ducks_music(self):
         rows = [{"start": 0, "end": 10, "caption": "hello", "onscreen_copy": ""}]

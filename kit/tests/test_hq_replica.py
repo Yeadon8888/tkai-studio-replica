@@ -69,6 +69,64 @@ class ShotListValidation(unittest.TestCase):
             self.assertEqual((run / "benchmark" / "video.mp4").read_bytes(), b"video")
             self.assertEqual(result["benchmark_media"]["cover"]["status"], "copied")
 
+    def test_target_duration_is_sent_to_breakdown_and_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir()
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "url": "https://example.test/video", "duration": 40.0,
+            }]), encoding="utf-8")
+            prompts = []
+
+            def model_call(content, **_kwargs):
+                prompts.append(content[0]["text"])
+                value = shots(); value["duration"] = 20
+                value["structure"] = [{"beat": "证明", "start": 0, "end": 20}]
+                value["shots"] = [dict(value["shots"][0], start=0, end=20)]
+                return json.dumps(value)
+
+            result = shot_list.build(run, batch, "C023", model_call=model_call,
+                                     reachable=lambda _url: True, target_duration=20)
+        self.assertIn("精确 20 秒", prompts[0])
+        self.assertEqual((result["reference_duration"], result["target_duration"], result["duration"]),
+                         (40.0, 20.0, 20.0))
+
+    def test_local_video_is_deleted_and_logged_after_breakdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir(); video = root / "clip.mp4"; video.write_bytes(b"video")
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "local_file": str(video), "duration_s": 12,
+            }]), encoding="utf-8")
+            deleted, logged = [], []
+            result = shot_list.build(
+                run, batch, "C023", model_call=lambda *_a, **_k: json.dumps(shots()),
+                upload=lambda _path: {"url": "https://example.test/clip.mp4", "path": "clip.mp4"},
+                delete=lambda info: deleted.append(info["path"]) or True,
+                media_log=lambda _info, status: logged.append(status),
+            )
+        self.assertEqual(deleted, ["clip.mp4"])
+        self.assertTrue(logged[0]["deleted"])
+        self.assertEqual((result["source"], result["media_deleted"]),
+                         ("local_upload_whole_video", True))
+
+    def test_local_video_is_deleted_when_model_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir(); video = root / "clip.mp4"; video.write_bytes(b"video")
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "local_file": str(video),
+            }]), encoding="utf-8")
+            deleted = []
+            with self.assertRaisesRegex(RuntimeError, "upstream"):
+                shot_list.build(
+                    run, batch, "C023", model_call=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("upstream")),
+                    upload=lambda _path: {"url": "https://example.test/clip.mp4", "path": "clip.mp4"},
+                    delete=lambda info: deleted.append(info["path"]) or True,
+                    media_log=lambda *_a: None,
+                )
+        self.assertEqual(deleted, ["clip.mp4"])
+
 
 class ShotPlanRoutes(unittest.TestCase):
     def test_groups_continuous_shots_and_uses_scene_first(self):
@@ -89,6 +147,17 @@ class ShotPlanRoutes(unittest.TestCase):
         for segment in plan["segments"]:
             self.assertIn("do not render captions", segment["prompt"].lower())
             self.assertEqual(segment["seed"], 9)
+
+    def test_plan_can_reference_scene_before_budgeted_image_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ref = root / "ref.jpg"; ref.write_bytes(b"image")
+            scene = root / "scene.png"
+            script = {"scene": "A clean table", "shots": [{
+                "id": f"S0{i}", "visual_prompt": "A hand moves the product", "voiceover": "Safe line",
+                "caption": "Safe line", "onscreen_copy": "", "end_state": "product held",
+            } for i in range(1, 4)]}
+            plan = shot_plan.make_plan(shots(), script, [ref], scene_path=scene, seed=9)
+        self.assertEqual(plan["segments"][0]["images"][0], str(scene.resolve()))
 
     def test_single_long_shot_is_evenly_split_under_fifteen(self):
         data = shots()

@@ -350,6 +350,9 @@ def status(product, run=None):
         first = selected[0] if selected else {}
         command = [sys.executable, str(KIT / "shot_list.py"), "--project", str(run_dir),
                    "--batch", str(first.get("batch") or "<调研批次>"), "--id", str(first.get("id") or "<候选id>")]
+        project_meta = read_json(run_dir / "project.json", {}) or {}
+        if project_meta.get("target_duration") is not None:
+            command.extend(["--target-duration", str(project_meta["target_duration"])])
         result = {**base, "stage": "shots", "stage_label": STAGE_LABELS["shots"],
                   "action": {"type": "paid", "command": command, "summary": "调用模型拆出镜头表", "estimated_cny": None,
                              "approval": benchmark_cp["id"]}}

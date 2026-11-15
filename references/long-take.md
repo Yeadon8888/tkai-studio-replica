@@ -18,6 +18,8 @@
 
 连续的 `continuous` 镜头合成一个生成单元；`cut` 和 `match_cut` 开新单元。单元超过 15 秒时形成同一 `chain_group` 的多个块。第一块走 cinema 质量路线，后续块走 first-last 首尾帧路线。`match_cut` 新单元也用上一段尾帧接力。
 
+例外：有口播的镜头全部 `speaker_on_screen: true` 时要求 H3 原生口播，包括可见特殊角色声线。超过 15 秒或 `match_cut` 的后续块改用独立 cinema/quality 单元并硬切，每块各自生成原声；不使用无原声证据的 first-last，不回退 TTS。
+
 ## 定场图、接力和 seed
 
 先用 `keyframe.py scene` 根据 `script.json` 的 `scene` 和真实产品图生成 `scene.png`。每个 cinema 请求把它放在 `images[0]`，产品图放在后面，确保各段处在同一世界。

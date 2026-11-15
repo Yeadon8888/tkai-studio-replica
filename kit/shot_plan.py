@@ -150,13 +150,14 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
     if any(not Path(path).is_file() for path in refs):
         raise FileNotFoundError("真实产品图有缺失")
     scene = Path(scene_path).expanduser().resolve() if scene_path else None
-    if not scene or not scene.is_file():
-        raise FileNotFoundError("缺少共用定场图 scene.png；先运行 keyframe.py scene")
+    if not scene:
+        raise FileNotFoundError("缺少共用定场图 scene.png 路径")
     seed = int(seed if seed is not None else secrets.randbelow(2_147_483_646) + 1)
     if seed < 1:
         raise ValueError("连续性计划 seed 必须大于等于 1")
     groups = continuity_groups(shots)
-    selected_audio = audio_route(shots_data["audio_mode"])
+    selected_audio = ("native" if shot_list.all_speech_is_on_camera(shots_data)
+                      else audio_route(shots_data["audio_mode"]))
     first_last_audio = first_last_audio or {"usable": False, "reason": "未提供 first-last 原声音轨证据"}
     segments = []
     for group_index, group in enumerate(groups, 1):
@@ -164,7 +165,10 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
         starts_match_cut = group[0].get("join") == "match_cut"
         for chunk_index, chunk in enumerate(chunks, 1):
             script_rows = [rows[atom["shot"]["id"]] for atom in chunk]
-            chained = chunk_index > 1 or starts_match_cut
+            # 出镜口播必须由 H3 每个单元原生生成。first-last 没有可靠原声证据时，
+            # 把超过 15 秒或 match-cut 的后续块当作独立 quality 单元硬切，不回退 TTS。
+            native_hard_cut = selected_audio == "native"
+            chained = (chunk_index > 1 or starts_match_cut) and not native_hard_cut
             route = "keyframe" if chained else "quality"
             resolution = "768p" if chained else "960p"
             source_duration = sum(atom["duration"] for atom in chunk)
@@ -201,6 +205,8 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
                 "chain_total": len(chunks),
             }
             segment["audio_route"] = selected_audio
+            if native_hard_cut and (chunk_index > 1 or starts_match_cut):
+                segment["join_strategy"] = "hard_cut_for_native_audio"
             if route == "keyframe" and selected_audio == "native" and not first_last_audio.get("usable"):
                 segment["audio_route"] = "tts"
                 segment["audio_route_reason"] = first_last_audio.get("reason") or "first-last 原声不可用"
