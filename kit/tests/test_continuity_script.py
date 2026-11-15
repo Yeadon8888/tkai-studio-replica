@@ -20,14 +20,15 @@ import shot_plan  # noqa: E402
 def shot(sid, start, end, join="cut", voice="source words"):
     return {"id": sid, "start": start, "end": end, "scale": "close", "camera": "fixed",
             "action": "move product", "product_role": "subject", "hand_action": True,
-            "onscreen_text": "", "voiceover": voice, "music_sfx": "", "rhythm": "steady",
+            "onscreen_text": "source overlay", "voiceover": voice, "caption": voice,
+            "music_sfx": "", "rhythm": "steady",
             "hook_reason": "proof", "join": join, "keep": "keep", "redo_reason": "",
             "end_state": "the product is centered"}
 
 
 def shots(rows):
     duration = rows[-1]["end"]
-    return {"duration": duration, "summary": "proof", "candidate_id": "C1",
+    return {"duration": duration, "summary": "proof", "candidate_id": "C1", "audio_mode": "voiceover",
             "structure": [{"beat": "证明", "start": 0, "end": duration}], "shots": rows}
 
 

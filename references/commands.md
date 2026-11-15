@@ -119,9 +119,11 @@ python3 loop.py board --project <运行目录>                   # 默认 <运�
 
 ```bash
 python3 shot_list.py --project <运行目录> --batch <调研批次> --id C023
+python3 format_invariants.py --project <运行目录>
+python3 script_writer.py --project <运行目录> --facts "16 parameters,125 strips"
+python3 essence.py --project <运行目录> --preview
 python3 essence.py --project <运行目录> --plan <生成简报.json>
 python3 essence.py --project <运行目录> --plan <生成简报.json> --video <成片.mp4>
-python3 script_writer.py --project <运行目录> --facts "16 parameters,125 strips"
 python3 keyframe.py scene --project <运行目录> --product-reference <产品图1>
 python3 shot_plan.py --project <运行目录> --refs <产品图1,产品图2,产品图3> \
   --id hq-c023
@@ -133,12 +135,13 @@ python3 loop.py board --project <运行目录>
 ```
 
 - `shot_list.py` 整条读取画面和声音，先给整体叙事结构与 `audio_mode`，再按真实切镜输出；每镜记录 `speaker_on_screen`，`shots.json` 必须从 0 秒连续覆盖到视频结尾。
-- `essence.py` 只从人工确认档位和 `shots.json` 生成逐项清单；读不到 `tier_overrides.json` 或计划档位就停止。带 `--video` 时计算切点、时长、节拍代码项，专家项缺失记为 `unclear`。
+- `format_invariants.py` 从 `shots.json` 提取字幕、口播、屏幕文字形式、CTA 与品名次数，写入 `format.json`，不调用模型。
+- `essence.py` 只从人工确认档位和 `shots.json` 生成逐项清单；读不到 `tier_overrides.json` 或计划档位就停止。`--preview` 在付费前按脚本计算形式预估；带 `--video` 时计算切点、时长、节拍和形式代码项，专家项缺失记为 `unclear`。
 - `script_writer.py` 用 `MODEL_SCRIPT` 生成 `script.json`；产品事实、竞品词、口播速度与画面文字要求由代码阻塞校验，最多重写一次。
 - `keyframe.py scene` 会真实调用一次图片编辑，生成共用定场图；没有付费授权时不要执行。
 - `shot_plan.py` 按 `cut`/`continuous`/`match_cut` 分组，单次 1–15 秒；计划记录统一 seed、接力块和预计金额，不发起视频生成。完整规则见 `long-take.md`。
 - `loop.py gen` 仍在每个视频请求前调用 `products.can_spend`；每段独立落盘、独立评审。
-- `compose.py` 的 TTS 失败不重试；`native` 单元保留并统一 H3 原声响度，`tts` 单元使用口播音轨，混合路线按时间窗切换。字幕始终叠加，音乐增益固定压低并在 `compose/compose.json` 记录。
+- `compose.py` 的 TTS 失败不重试；`native` 单元保留并统一 H3 原声响度，`tts` 单元使用口播音轨，混合路线按时间窗切换。字幕是否叠加服从 `format.json`；音乐增益固定压低并在 `compose/compose.json` 记录。
 - 合成后最终评审会新增 `replication_fidelity`，R 专家同时读取对标与成片。最终人工决定仍用 `human.py record`，流程不会自动扩量。
 
 ## 人工判定与校准（`human.py` / `calibrate.py`）

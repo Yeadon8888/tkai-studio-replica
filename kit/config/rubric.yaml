@@ -1,5 +1,15 @@
 # Gemini 自检评分表。总分只用来排序；通过与否由"逐项下限 + 硬否决"决定。
 version: 1
+format_invariants:
+  cta_patterns:
+    - "\\bshop\\b"
+    - "\\bbuy\\b"
+    - "\\border\\b"
+    - "\\blink\\b"
+    - "\\bget\\s+yours\\b"
+    - "\\bcheck\\b.{0,30}\\btoday\\b"
+    - "\\btap\\b"
+    - "\\bclick\\b"
 # 自动轮数上限已迁移到 .env 的 MAX_ATTEMPTS，由 gate.py 与 refine_loop.py 统一读取。
 pass:
   weighted_min: 8.0          # 加权总分下限

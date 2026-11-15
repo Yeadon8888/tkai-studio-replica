@@ -203,7 +203,7 @@ class RunnerCase(unittest.TestCase):
         products.create("p1", "Exact Product", 5, "Exact Product blue bottle")
         run = products.new_run("p1", "test", date="20261114")
         shots = {"audio_mode": "voiceover", "shots": [{"id": "S01", "start": 0, "end": 4,
-                  "voiceover": "source"}]}
+                  "voiceover": "source", "caption": "source"}]}
         script = {"scene": "A bright kitchen", "shots": [{"id": "S01",
                   "visual_prompt": "A hand holds Exact Product blue bottle", "voiceover": "Blue bottle",
                   "caption": "Blue bottle", "onscreen_copy": "", "end_state": "Bottle centered"}]}
