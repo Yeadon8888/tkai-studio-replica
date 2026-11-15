@@ -60,7 +60,7 @@ python3 kit/platform_runner.py --loop
 
 ## 人工节点与失败规则
 
-- `script`：执行机按节点数据约定 v1 上报 `contractVersion`、声音模式、场景、配乐描述以及零基 `index` 的逐段时长、画面提示词、口播、字幕和画面文字。中台编辑对象中的 `subtitle` 映射为本地 `caption`，`onscreenCopy` 映射为 `onscreen_copy`；未知字段直接报校验错误。选择“要求修改”后，执行机把说明和逐段修改作为人的意见交给脚本模型，代码校验通过才保存新版本；新节点带上一节点 ID 和原意见用于对比。每个运行最多自动重写 `SCRIPT_FEEDBACK_MAX` 次，默认 3 次，超过后请求失败并保留原因。每版保存在 `script.v<N>.json`，`script.json` 始终是最新版，版本元数据追加到 `script_history.jsonl`。
+- `script`：执行机按节点数据约定 v1 上报 `contractVersion`、声音模式、场景、配乐描述以及零基 `index` 的逐段时长、画面提示词、口播、字幕和画面文字。画面文字可以是字符串，也可以是 `reply_sticker` 对象；中台编辑对象中的 `subtitle` 映射为本地 `caption`，`onscreenCopy` 原样映射为本地 `onscreen_copy`。对象编辑必须保持 `style=reply_sticker`，并通过评论改写、虚构用户名等完整脚本校验；未知字段直接报校验错误。每次上报脚本节点前都会运行零成本神韵预估并附带分数、通过数、总项数和逐项结果；预估异常只附带中文错误，不阻断上报。选择“要求修改”后，执行机把说明和逐段修改作为人的意见交给脚本模型，代码校验通过才保存新版本；新节点带上一节点 ID 和原意见用于对比。每个运行最多自动重写 `SCRIPT_FEEDBACK_MAX` 次，默认 3 次，超过后请求失败并保留原因。每版保存在 `script.v<N>.json`，`script.json` 始终是最新版，版本元数据追加到 `script_history.jsonl`。
 - `budget`：中台展示每个视频单元、定场图、TTS 和配乐明细。选择“要求修改”后请求保持 `waiting_human`，提示调整请求预算或缩减计划；驳回才失败。批准额度仍受请求预算与本地品预算双重限制。
 - 新脚本或预算内容上报成功后，执行机会调用中台作废接口，把同一请求中仍待处理的旧同类节点作废。旧中台返回 HTTP 404 时只记录日志，当前请求继续运行。
 - `verdict`：不单独上报确认节点。成片上传并 `complete` 后，执行机读取现有审核结果，写回本地 verdict 节点和 `human_decisions.jsonl`。

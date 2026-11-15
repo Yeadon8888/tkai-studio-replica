@@ -53,7 +53,10 @@ def parser():
     edit = command("edit-script")
     edit.add_argument("id"); edit.add_argument("--segment", type=int, required=True)
     edit.add_argument("--field", required=True, choices=("voiceover", "caption", "onscreen_copy", "visual_prompt"))
-    edit.add_argument("--value", required=True); edit.add_argument("--note", default="人工编辑脚本"); edit.add_argument("--by", default="未署名")
+    value = edit.add_mutually_exclusive_group(required=True)
+    value.add_argument("--value", help="字符串值")
+    value.add_argument("--json-value", help="JSON 值，用于 reply_sticker 等对象")
+    edit.add_argument("--note", default="人工编辑脚本"); edit.add_argument("--by", default="未署名")
     adopt = command("adopt")
     adopt.add_argument("--product", required=True); adopt.add_argument("--run")
     console = command("console")
@@ -85,8 +88,9 @@ def main(argv=None):
         result, code = checkpoints.resolve(args.id, status, args.note, args.by), 0
         result = {**result, "message": f"节点已{ {'approved':'批准','rejected':'驳回','changes_requested':'要求修改'}[status] }"}
     else:
+        value = json.loads(args.json_value) if args.json_value is not None else args.value
         result = checkpoints.resolve(args.id, "changes_requested", args.note, args.by,
-                                     [{"segment": args.segment, "field": args.field, "value": args.value}])
+                                     [{"segment": args.segment, "field": args.field, "value": value}])
         result = {**result, "message": "脚本编辑已校验并写入，节点状态为要求修改"}
         code = 0
     _print(result, args.json)
