@@ -106,28 +106,90 @@ def _script_payload(run_dir):
     except ValueError:
         route = "tts"
     segments = []
-    for row in script.get("shots") or []:
+    for index, row in enumerate(script.get("shots") or []):
         timing = source.get(str(row.get("id")), {})
         segments.append({
+            "index": index,
             "id": row.get("id"),
-            "duration": round(float(timing.get("end", 0)) - float(timing.get("start", 0)), 3),
+            "durationSeconds": round(float(timing.get("end", 0)) - float(timing.get("start", 0)), 3),
             "visualPrompt": row.get("visual_prompt", ""),
             "voiceover": row.get("voiceover", ""),
-            "caption": row.get("caption", ""),
+            "subtitle": row.get("caption", ""),
             "onscreenCopy": row.get("onscreen_copy", ""),
             "audioRoute": route,
         })
-    return {"segments": segments, "scene": script.get("scene", "")}
+    return {"contractVersion": 1, "audioMode": audio_mode, "scene": script.get("scene", ""),
+            "music": script.get("music") or {}, "segments": segments}
 
 
-def _checkpoint_payload(row, run_dir):
+def _budget_label(unit):
+    kind = unit.get("kind")
+    identifier = str(unit.get("id") or "").strip()
+    if kind == "video":
+        return f"{identifier} 视频".strip()
+    if kind in ("keyframe", "chain_keyframe"):
+        return "定场图" if kind == "keyframe" else f"{identifier} 定场图".strip()
+    if kind == "tts":
+        return "TTS"
+    if kind == "music":
+        return "配乐"
+    raise ValueError(f"未知预算单元类型：{kind}")
+
+
+def _budget_payload(subject, request_budget_cny):
+    units = []
+    for unit in subject.get("units") or []:
+        units.append({
+            "label": _budget_label(unit),
+            "model": unit.get("model"),
+            "durationSeconds": unit.get("duration"),
+            "unitPriceCny": unit.get("unitPrice"),
+            "totalCny": unit.get("totalCny"),
+        })
+    values = [unit.get("totalCny") for unit in units]
+    prices_known = all(unit.get("unitPriceCny") is not None for unit in units)
+    total = (round(sum(float(value) for value in values), 4)
+             if prices_known and all(value is not None for value in values) else None)
+    return {"contractVersion": 1, "units": units, "totalCny": total,
+            "requestBudgetCny": request_budget_cny}
+
+
+def _checkpoint_payload(row, run_dir, request_budget_cny=None):
     if row["kind"] == "script":
         return _script_payload(run_dir)
     if row["kind"] == "budget":
-        subject = row.get("subject") or {}
-        return {"units": subject.get("units") or [], "totalCny": subject.get("totalCny"),
-                "estimatedCny": subject.get("estimated_cny")}
+        return _budget_payload(row.get("subject") or {}, request_budget_cny)
     return {"subject": row.get("subject") or {}}
+
+
+def _platform_edits(value):
+    """把中台约定 v1 的零基段编辑转换为 checkpoints 的一基逐字段列表。"""
+    if value in (None, {}):
+        return []
+    if not isinstance(value, dict) or not isinstance(value.get("segments"), list):
+        raise ValueError("脚本 edits 必须是包含 segments 列表的对象")
+    unknown_root = set(value) - {"segments"}
+    if unknown_root:
+        raise ValueError(f"脚本 edits 含未知字段：{', '.join(sorted(unknown_root))}")
+    field_map = {"voiceover": "voiceover", "subtitle": "caption",
+                 "onscreenCopy": "onscreen_copy"}
+    edits = []
+    for position, segment in enumerate(value["segments"]):
+        if not isinstance(segment, dict) or "index" not in segment:
+            raise ValueError(f"脚本 edits.segments[{position}] 缺少 index")
+        unknown = set(segment) - ({"index"} | set(field_map))
+        if unknown:
+            raise ValueError(f"脚本 edits.segments[{position}] 含未知字段：{', '.join(sorted(unknown))}")
+        if len(segment) == 1:
+            raise ValueError(f"脚本 edits.segments[{position}] 没有修改字段")
+        index = segment["index"]
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            raise ValueError(f"脚本 edits.segments[{position}].index 必须是非负整数")
+        for remote_field, local_field in field_map.items():
+            if remote_field in segment:
+                edits.append({"segment": index + 1, "field": local_field,
+                              "value": segment[remote_field]})
+    return edits
 
 
 def _duration(path):
@@ -364,7 +426,7 @@ class Runner:
         mapping = state.setdefault("checkpointMap", {})
         external_id = mapping.get(cp["id"], cp["id"])
         if cp["id"] not in mapping:
-            payload = _checkpoint_payload(cp, run_dir)
+            payload = _checkpoint_payload(cp, run_dir, state["request"].get("budgetCny"))
             feedback = state.get("scriptFeedback") or {}
             if cp["kind"] == "script" and feedback.get("scriptSha256") == (cp.get("subject") or {}).get("sha256"):
                 payload.update(previousExternalId=feedback["previousExternalId"],
@@ -373,6 +435,7 @@ class Runner:
                                           payload)
             mapping[cp["id"]] = external_id
             _save_state(state)
+            self._supersede_previous(state, cp, external_id)
         remote = next((row for row in self.client.checkpoints(request_id)
                        if row.get("externalId") == external_id or row.get("external_id") == external_id), None)
         if not remote or remote.get("status") == "pending":
@@ -384,8 +447,10 @@ class Runner:
         if status not in ("approved", "rejected", "changes_requested"):
             raise ValueError(f"中台节点状态无效：{status}")
         note = remote.get("decisionNote") or remote.get("decision_note") or ""
-        edits = remote.get("edits") or []
+        edits = []
         try:
+            if cp["kind"] == "script":
+                edits = _platform_edits(remote.get("edits"))
             checkpoints.resolve(cp["id"], status, note, remote.get("decidedBy") or "platform-request",
                                 edits if status == "approved" else None)
         except (KeyError, TypeError, ValueError) as exc:
@@ -437,6 +502,28 @@ class Runner:
         state.update(phase="running", updatedAt=_now())
         _save_state(state)
         return True
+
+    def _supersede_previous(self, state, cp, external_id):
+        """新内容上报成功后，作废中台上同类的旧待处理节点。"""
+        request_id = state["request"]["id"]
+        feedback = state.get("scriptFeedback") or {}
+        if cp["kind"] == "script" and feedback.get("scriptSha256") == (cp.get("subject") or {}).get("sha256"):
+            reason = f"已按意见重写为第 {feedback.get('version', 2)} 版"
+        elif cp["kind"] == "script":
+            reason = "系统补写配乐描述"
+        else:
+            reason = "预算内容已更新"
+        for row in self.client.checkpoints(request_id):
+            previous_id = row.get("externalId") or row.get("external_id")
+            if (not previous_id or previous_id == external_id or row.get("kind") != cp["kind"]
+                    or row.get("status") != "pending"):
+                continue
+            try:
+                self.client.supersede_checkpoint(request_id, previous_id, reason)
+            except PlatformError as exc:
+                if exc.status != 404:
+                    raise
+                print(f"中台未提供节点作废接口，保留旧节点 {previous_id}：HTTP 404")
 
     def _upload(self, state, current):
         request, pid, run_id = state["request"], state["productId"], state["run"]

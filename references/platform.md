@@ -34,7 +34,7 @@ SCRIPT_FEEDBACK_MAX=3
 
 `RUNNER_ID` 留空时使用主机名。`MODEL_ANCHOR` 留空时沿用 `MODEL_TEXT`。产品锚点模型必须根据产品图输出一句英文，并逐字包含中台产品名。
 
-预算节点会分别列出视频、定场图和 TTS。`IMAGE_PRICE_CNY` 或需要 TTS 时的 `TTS_PRICE_CNY` 未配置，预算总额会保持未知，不应批准；先补齐经确认的人民币价格。请求预算还必须不超过 `PRODUCT_BUDGET_CNY` 单品上限。
+预算节点会按节点数据约定 v1 分别列出每个视频单元、定场图、TTS 和配乐，并同时上报本轮合计与请求预算。`IMAGE_PRICE_CNY` 或需要 TTS 时的 `TTS_PRICE_CNY` 未配置，预算总额会保持 `null`，不应批准；先补齐经确认的人民币价格。请求预算还必须不超过 `PRODUCT_BUDGET_CNY` 单品上限。
 
 ## 启动
 
@@ -60,8 +60,9 @@ python3 kit/platform_runner.py --loop
 
 ## 人工节点与失败规则
 
-- `script`：中台展示逐段时长、画面提示词、口播、字幕和声音路线。选择“要求修改”后，执行机把说明和逐段修改作为人的意见交给脚本模型，代码校验通过才保存新版本；新节点带上一节点 ID 和原意见用于对比。每个运行最多自动重写 `SCRIPT_FEEDBACK_MAX` 次，默认 3 次，超过后请求失败并保留原因。每版保存在 `script.v<N>.json`，`script.json` 始终是最新版，版本元数据追加到 `script_history.jsonl`。
+- `script`：执行机按节点数据约定 v1 上报 `contractVersion`、声音模式、场景、配乐描述以及零基 `index` 的逐段时长、画面提示词、口播、字幕和画面文字。中台编辑对象中的 `subtitle` 映射为本地 `caption`，`onscreenCopy` 映射为 `onscreen_copy`；未知字段直接报校验错误。选择“要求修改”后，执行机把说明和逐段修改作为人的意见交给脚本模型，代码校验通过才保存新版本；新节点带上一节点 ID 和原意见用于对比。每个运行最多自动重写 `SCRIPT_FEEDBACK_MAX` 次，默认 3 次，超过后请求失败并保留原因。每版保存在 `script.v<N>.json`，`script.json` 始终是最新版，版本元数据追加到 `script_history.jsonl`。
 - `budget`：中台展示每个视频单元、定场图、TTS 和配乐明细。选择“要求修改”后请求保持 `waiting_human`，提示调整请求预算或缩减计划；驳回才失败。批准额度仍受请求预算与本地品预算双重限制。
+- 新脚本或预算内容上报成功后，执行机会调用中台作废接口，把同一请求中仍待处理的旧同类节点作废。旧中台返回 HTTP 404 时只记录日志，当前请求继续运行。
 - `verdict`：不单独上报确认节点。成片上传并 `complete` 后，执行机读取现有审核结果，写回本地 verdict 节点和 `human_decisions.jsonl`。
 - 上游失败不会换模型或自动重提。已有视频任务先查询原任务；失败原因上报为 `failed`。
 - 中台返回 `LEASE_EXPIRED` 时，执行机会用同一 `RUNNER_ID` 续领一次，并仅重试原请求一次。历史上因该错误落盘的 `failed` 状态可在重启后恢复；其他失败不恢复。

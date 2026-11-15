@@ -88,11 +88,25 @@ class ClientTest(unittest.TestCase):
         ApiHandler.fail_once = True
         self.client._request("POST", "/retry", {})
         self.assertEqual(sum(path == "/retry" for _, path, _, _ in ApiHandler.calls), 2)
+        payload = {"contractVersion": 1, "audioMode": "music_only", "scene": "桌面",
+                   "music": {}, "segments": []}
         for _ in range(2):
-            self.client.create_checkpoint("r1", "cp1", "script", "脚本", {"segments": []})
+            self.client.create_checkpoint("r1", "cp1", "script", "脚本", payload)
         bodies = [body for method, path, body, _ in ApiHandler.calls if path.endswith("/checkpoints")]
         self.assertEqual(len(bodies), 2)
         self.assertEqual(json.loads(bodies[0]), json.loads(bodies[1]))
+
+    def test_checkpoint_payload_is_validated_before_post(self):
+        with self.assertRaisesRegex(ValueError, "缺少字段"):
+            self.client.create_checkpoint("r1", "cp1", "script", "脚本", {"segments": []})
+        self.assertEqual(ApiHandler.calls, [])
+
+    def test_supersede_posts_reason_to_encoded_checkpoint_path(self):
+        self.client.supersede_checkpoint("request/1", "cp script/1", "系统补写配乐描述")
+        method, path, body, _ = ApiHandler.calls[-1]
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/api/agent/production-requests/request%2F1/checkpoints/cp%20script%2F1/supersede")
+        self.assertEqual(json.loads(body), {"reason": "系统补写配乐描述"})
 
     def test_lease_expired_claims_once_then_retries_original_request(self):
         self.client.progress("lease-recover", "script", "等待确认", "waiting_human")
@@ -130,7 +144,7 @@ class ClientTest(unittest.TestCase):
 class FakeClient:
     def __init__(self):
         self.progress_rows = []; self.created = []; self.remote = []; self.verdict_data = {}
-        self.uploads = []; self.completions = []
+        self.uploads = []; self.completions = []; self.superseded = []; self.supersede_error = None
 
     def progress(self, request_id, stage, message, status="running"):
         self.progress_rows.append((request_id, stage, message, status)); return {}
@@ -143,6 +157,15 @@ class FakeClient:
 
     def checkpoints(self, _request_id):
         return self.remote
+
+    def supersede_checkpoint(self, request_id, external_id, reason):
+        if self.supersede_error:
+            raise self.supersede_error
+        self.superseded.append((request_id, external_id, reason))
+        for row in self.remote:
+            if (row.get("externalId") or row.get("external_id")) == external_id:
+                row["status"] = "superseded"
+        return {"ok": True}
 
     def verdict(self, _request_id):
         return self.verdict_data
@@ -227,11 +250,43 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(checkpoints.get(cp["id"])["status"], "approved")
         self.assertEqual(len(self.client.created), 1)
 
+    def test_script_payload_uses_contract_v1_fields(self):
+        run, _ = self._script_checkpoint()
+        script = json.loads((run / "script.json").read_text(encoding="utf-8"))
+        script["music"] = {"mood": "calm", "tempo_bpm": 72, "era_style": "modern",
+                           "instruments": ["piano"], "energy_curve": "steady"}
+        (run / "script.json").write_text(json.dumps(script), encoding="utf-8")
+        payload = platform_runner._script_payload(run)
+        self.assertEqual(payload["contractVersion"], 1)
+        self.assertEqual(payload["audioMode"], "voiceover")
+        self.assertEqual(payload["music"]["tempo_bpm"], 72)
+        self.assertEqual(payload["segments"][0], {
+            "index": 0, "id": "S01", "durationSeconds": 4.0,
+            "visualPrompt": "A hand holds Exact Product blue bottle",
+            "voiceover": "Blue bottle", "subtitle": "Blue bottle", "onscreenCopy": "",
+            "audioRoute": "tts",
+        })
+
+    def test_approved_contract_edits_map_to_local_fields(self):
+        run, cp = self._script_checkpoint()
+        self.client.remote = [{"externalId": cp["id"], "kind": "script", "status": "approved",
+                               "decisionNote": "可以执行", "decidedBy": "user-1",
+                               "edits": {"segments": [{"index": 0, "subtitle": "Blue bottle",
+                                                        "onscreenCopy": ""}]}}]
+        state = {"request": self._request(), "checkpointMap": {cp["id"]: cp["id"]}}
+        self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
+        saved = checkpoints.get(cp["id"])
+        self.assertEqual([row["field"] for row in saved["edits"]], ["caption", "onscreen_copy"])
+
+    def test_contract_edits_reject_unknown_fields(self):
+        with self.assertRaisesRegex(ValueError, "未知字段"):
+            platform_runner._platform_edits({"segments": [{"index": 0, "visualPrompt": "no"}]})
+
     def test_changes_requested_rewrites_and_posts_new_script_node(self):
         run, cp = self._script_checkpoint()
         self.client.remote = [{"externalId": cp["id"], "status": "changes_requested",
             "decisionNote": "修改参数", "decidedBy": "user-1",
-            "edits": [{"segment": 1, "field": "voiceover", "value": "Claim 999 benefits"}]}]
+            "edits": {"segments": [{"index": 0, "voiceover": "Claim 999 benefits"}]}}]
         state = {"request": self._request(), "checkpointMap": {}}
         captured = []
 
@@ -247,6 +302,8 @@ class RunnerCase(unittest.TestCase):
         self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
         self.assertEqual(checkpoints.get(cp["id"])["status"], "changes_requested")
         self.assertEqual(captured[0]["note"], "修改参数")
+        self.assertEqual(captured[0]["edits"], [
+            {"segment": 1, "field": "voiceover", "value": "Claim 999 benefits"}])
         new_subject = {"script": str((run / "script.json").relative_to(self.home)),
                        "sha256": engine._file_sha256(run / "script.json")}
         new_cp = checkpoints.create("p1", run.name, "script", "确认脚本", new_subject)
@@ -255,6 +312,27 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(payload["previousExternalId"], cp["id"])
         self.assertEqual(payload["feedback"], captured[0])
         self.assertEqual(state["phase"], "waiting_human")
+
+    def test_new_script_supersedes_all_previous_pending_nodes(self):
+        run, cp = self._script_checkpoint()
+        old = {"externalId": "old-script", "kind": "script", "status": "pending"}
+        self.client.remote = [old]
+        state = {"request": self._request(), "checkpointMap": {}, "scriptFeedback": {
+            "previousExternalId": "decided-script", "feedback": {"note": "缩短", "edits": []},
+            "scriptSha256": "old", "version": 3,
+        }}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertEqual(self.client.superseded, [
+            ("request-1", "old-script", "已按意见重写为第 3 版")])
+
+    def test_supersede_404_is_logged_but_does_not_fail(self):
+        run, cp = self._script_checkpoint()
+        self.client.remote = [{"externalId": "old-script", "kind": "script", "status": "pending"}]
+        self.client.supersede_error = platform_client.PlatformError("not found", 404, "{}")
+        state = {"request": self._request(), "checkpointMap": {}}
+        with mock.patch("builtins.print") as printed:
+            self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertIn("HTTP 404", printed.call_args.args[0])
 
     def test_pending_human_checkpoint_renews_lease_each_poll(self):
         run, cp = self._script_checkpoint()
@@ -272,7 +350,8 @@ class RunnerCase(unittest.TestCase):
             for version in range(2, 5):
                 handle.write(json.dumps({"version": version, "source": "human_feedback"}) + "\n")
         self.client.remote = [{"externalId": cp["id"], "status": "changes_requested",
-                               "decisionNote": "继续缩短", "decidedBy": "user-1", "edits": []}]
+                               "decisionNote": "继续缩短", "decidedBy": "user-1",
+                               "edits": {"segments": []}}]
         self.runner.script_builder = mock.Mock()
         with self.assertRaisesRegex(RuntimeError, "上限 3 次"):
             self.runner._resolve_platform_checkpoint({"request": self._request(), "checkpointMap": {}}, cp, run)
@@ -288,6 +367,40 @@ class RunnerCase(unittest.TestCase):
         state = {"request": self._request(), "checkpointMap": {}}
         self.assertTrue(self.runner._resolve_platform_checkpoint(state, cp, run))
         self.assertEqual(checkpoints.get(cp["id"])["status"], "approved")
+
+    def test_budget_payload_converts_engine_units_and_unknown_total(self):
+        subject = {"units": [
+            {"kind": "video", "id": "S01", "model": "video-model", "duration": 12,
+             "unitPrice": 0.23, "totalCny": 2.76},
+            {"kind": "keyframe", "id": "scene", "model": "image-model", "duration": None,
+             "unitPrice": None, "totalCny": None},
+            {"kind": "tts", "id": "voiceover", "model": "tts-model", "duration": None,
+             "unitPrice": 0.1, "totalCny": 0.1},
+            {"kind": "music", "id": "music-T1", "model": "music-model", "duration": 12,
+             "unitPrice": 2.5, "totalCny": 2.5},
+        ], "totalCny": 999}
+        payload = platform_runner._budget_payload(subject, 5)
+        self.assertEqual(payload["contractVersion"], 1)
+        self.assertEqual(payload["requestBudgetCny"], 5)
+        self.assertIsNone(payload["totalCny"])
+        self.assertEqual([row["label"] for row in payload["units"]],
+                         ["S01 视频", "定场图", "TTS", "配乐"])
+        self.assertEqual(payload["units"][0]["durationSeconds"], 12)
+        self.assertEqual(payload["units"][0]["unitPriceCny"], 0.23)
+        subject["units"][1]["totalCny"] = 0.5
+        self.assertIsNone(platform_runner._budget_payload(subject, 5)["totalCny"])
+
+    def test_changed_budget_supersedes_pending_old_budget(self):
+        products.create("p1", "Exact Product", 5, "Exact Product")
+        run = products.new_run("p1", "test", date="20261114")
+        cp = checkpoints.create("p1", run.name, "budget", "确认预算", {"units": []})
+        self.client.remote = [{"externalId": "old-budget", "kind": "budget", "status": "pending"}]
+        state = {"request": self._request(), "checkpointMap": {}}
+        self.assertFalse(self.runner._resolve_platform_checkpoint(state, cp, run))
+        self.assertEqual(self.client.created[-1]["payload"], {
+            "contractVersion": 1, "units": [], "totalCny": 0, "requestBudgetCny": 5})
+        self.assertEqual(self.client.superseded, [
+            ("request-1", "old-budget", "预算内容已更新")])
 
     def test_rejected_budget_maps_before_stopping(self):
         products.create("p1", "Exact Product", 5, "Exact Product")

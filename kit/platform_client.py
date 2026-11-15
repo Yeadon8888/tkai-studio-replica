@@ -41,6 +41,42 @@ def error_code(exc):
     return value.get("error") if isinstance(value, dict) else None
 
 
+def _require_fields(value, fields, label):
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} 必须是对象")
+    missing = [field for field in fields if field not in value]
+    if missing:
+        raise ValueError(f"{label} 缺少字段：{', '.join(missing)}")
+
+
+def validate_checkpoint_payload(kind, payload):
+    """发送前校验节点数据约定 v1，避免把残缺 payload 发给中台。"""
+    if kind == "script":
+        _require_fields(payload, ("contractVersion", "audioMode", "scene", "music", "segments"),
+                        "脚本节点 payload")
+        if payload["contractVersion"] != 1:
+            raise ValueError("脚本节点 contractVersion 必须为 1")
+        if not isinstance(payload["music"], dict) or not isinstance(payload["segments"], list):
+            raise ValueError("脚本节点 music 必须是对象，segments 必须是列表")
+        fields = ("index", "id", "durationSeconds", "visualPrompt", "voiceover", "subtitle",
+                  "onscreenCopy", "audioRoute")
+        for index, segment in enumerate(payload["segments"]):
+            _require_fields(segment, fields, f"脚本节点 segments[{index}]")
+        return
+    if kind == "budget":
+        _require_fields(payload, ("contractVersion", "units", "totalCny", "requestBudgetCny"),
+                        "预算节点 payload")
+        if payload["contractVersion"] != 1:
+            raise ValueError("预算节点 contractVersion 必须为 1")
+        if not isinstance(payload["units"], list):
+            raise ValueError("预算节点 units 必须是列表")
+        fields = ("label", "model", "durationSeconds", "unitPriceCny", "totalCny")
+        for index, unit in enumerate(payload["units"]):
+            _require_fields(unit, fields, f"预算节点 units[{index}]")
+        return
+    raise ValueError(f"不支持的中台节点类型：{kind}")
+
+
 def read_token(path):
     """读取 ffa_ 令牌；文件必须是普通文件且权限恰好为 0600。"""
     token_path = Path(path).expanduser()
@@ -144,9 +180,19 @@ class PlatformClient:
                              {"stage": stage, "message": message, "status": status})
 
     def create_checkpoint(self, request_id, external_id, kind, summary, payload):
+        validate_checkpoint_payload(kind, payload)
         return self._request("POST", f"/api/agent/production-requests/{urllib.parse.quote(request_id, safe='')}/checkpoints",
                              {"external_id": external_id, "kind": kind,
                               "summary": summary, "payload": payload})
+
+    def supersede_checkpoint(self, request_id, external_id, reason):
+        request = urllib.parse.quote(request_id, safe="")
+        checkpoint = urllib.parse.quote(external_id, safe="")
+        return self._request(
+            "POST",
+            f"/api/agent/production-requests/{request}/checkpoints/{checkpoint}/supersede",
+            {"reason": str(reason)},
+        )
 
     def checkpoints(self, request_id):
         data = self._request("GET", f"/api/agent/production-requests/{urllib.parse.quote(request_id, safe='')}/checkpoints")
