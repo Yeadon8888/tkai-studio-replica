@@ -89,14 +89,23 @@ def video_ingested(parts, usage):
     return rest >= settings.get_int("VIDEO_MIN_TOKENS")
 
 
-def audio_ingested(parts, usage):
+def audio_ingested(parts, usage, audio_seconds=None):
+    """先看 audio_tokens；部分上游（如带 reasoning_effort 时）把音频计入 text_tokens，
+    这时按"总输入远超纯文本"判断：输入 token ≥ 文本字符数 + 800 + 每秒 4 token。"""
     if not any(part.get("type") == "input_audio" for part in parts):
         return None
-    details = (usage or {}).get("prompt_tokens_details") or {}
-    return isinstance(details.get("audio_tokens"), (int, float)) and details["audio_tokens"] > 0
+    usage = usage or {}
+    details = usage.get("prompt_tokens_details") or {}
+    if isinstance(details.get("audio_tokens"), (int, float)) and details["audio_tokens"] > 0:
+        return True
+    if not audio_seconds:
+        return False
+    text_chars = sum(len(str(part.get("text") or "")) for part in parts if part.get("type") == "text")
+    return float(usage.get("prompt_tokens") or 0) >= text_chars + 800 + 4 * float(audio_seconds)
 
 
-def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text", reasoning_effort=None):
+def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text", reasoning_effort=None,
+           audio_seconds=None):
     """文本/理解模型调用。role 决定用哪个模型（.env 的 MODEL_<ROLE>，留空则用 MODEL_TEXT）。"""
     model = settings.model(role)
     cap = settings.get_int("LIMIT_TEXT_CALLS")
@@ -123,7 +132,7 @@ def gemini(parts, project, ref, max_tokens=1200, temperature=0.1, role="text", r
         text = message.get("content") or ""
         usage = js.get("usage") or {}
         seen = video_ingested(parts, usage)
-        heard = audio_ingested(parts, usage)
+        heard = audio_ingested(parts, usage, audio_seconds)
         truncated = choice.get("finish_reason") == "length" or (not text.strip() and bool(message.get("reasoning_content")))
         status = "truncated" if truncated else ("audio_not_ingested" if heard is False else
                  ("ok" if seen is not False else "video_not_ingested"))

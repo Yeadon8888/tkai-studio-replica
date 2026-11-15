@@ -12,9 +12,9 @@ from common import parse_json, write_json  # noqa: E402
 import loop  # noqa: E402
 
 
-PROMPT = """你是专业英语语音转写员。只根据音频原样转写，不润色、不改写。
-保留说话人、语气和原始时间码；听不清写 [inaudible]。只输出 JSON：
-{"language":"en","segments":[{"start":0.0,"end":2.4,"speaker":"...","text":"..."}]}"""
+PROMPT = """你是专业语音转写员。只根据音频原样转写，不润色、不改写；保留原语言（不要翻译进 text）。
+每段另给英文直译 text_en（原文已是英文则与 text 相同）。保留说话人、语气和原始时间码；听不清写 [inaudible]。
+只输出 JSON：{"language":"<原语言代码>","segments":[{"start":0.0,"end":2.4,"speaker":"...","text":"...","text_en":"..."}]}"""
 
 
 def extract_audio(video, output):
@@ -42,14 +42,23 @@ def validate(data):
     return {**data, "segments": rows, "timebase": "reference_original_seconds"}
 
 
+def _duration(path):
+    import subprocess
+    try:
+        return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                              "-of", "default=nw=1:nk=1", str(path)], text=True).strip())
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+        return None
+
+
 def transcribe(video, project, ref="benchmark", model_call=loop.gemini):
     project = Path(project)
     audio = extract_audio(video, project / "transcript" / "reference-16k-mono.mp3")
     encoded = base64.b64encode(audio.read_bytes()).decode("ascii")
     raw = model_call([{"type": "text", "text": PROMPT},
                       {"type": "input_audio", "input_audio": {"data": encoded, "format": "mp3"}}],
-                     project=project.name, ref=f"{ref}:transcript", max_tokens=4000,
-                     temperature=0, role="transcribe", reasoning_effort="low")
+                     project=project.name, ref=f"{ref}:transcript", max_tokens=24000,
+                     temperature=0, role="transcribe", audio_seconds=_duration(audio))
     parsed = parse_json(raw, require=("segments",))
     result = validate(parsed)
     write_json(project / "transcript" / "transcript.json", result)

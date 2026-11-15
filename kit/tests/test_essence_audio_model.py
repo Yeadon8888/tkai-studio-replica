@@ -181,6 +181,14 @@ class OutputLimitTest(unittest.TestCase):
             with self.assertRaises(loop.AudioNotIngested):
                 loop.gemini(parts, "p", "r", role="transcribe")
 
+    def test_audio_counted_as_text_is_accepted_by_total_tokens(self):
+        parts = [{"type": "text", "text": "transcribe"}, {"type": "input_audio", "input_audio": {"data": "x"}}]
+        lumped = {"prompt_tokens": 1050, "prompt_tokens_details": {"text_tokens": 1050, "audio_tokens": 0}}
+        self.assertTrue(loop.audio_ingested(parts, lumped, audio_seconds=40))
+        text_only = {"prompt_tokens": 60, "prompt_tokens_details": {"text_tokens": 60, "audio_tokens": 0}}
+        self.assertFalse(loop.audio_ingested(parts, text_only, audio_seconds=40))
+        self.assertFalse(loop.audio_ingested(parts, lumped))
+
     def test_transcript_uses_only_mono_mp3_and_keeps_original_timestamps(self):
         with tempfile.TemporaryDirectory() as tmp:
             project, source = Path(tmp), Path(tmp) / "video.mp4"
@@ -192,7 +200,7 @@ class OutputLimitTest(unittest.TestCase):
 
             def model(parts, **kwargs):
                 self.assertEqual([part["type"] for part in parts], ["text", "input_audio"])
-                self.assertEqual(kwargs["reasoning_effort"], "low")
+                self.assertNotIn("reasoning_effort", kwargs)  # 带它时上游把音频计入 text_tokens
                 return json.dumps({"language": "en", "segments": [
                     {"start": 1.25, "end": 2.75, "speaker": "villain", "text": "Don't test me"}]})
 
