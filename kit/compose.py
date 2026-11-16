@@ -70,7 +70,8 @@ def apply_script(brief, script, format_data=None):
         updated = dict(segment)
         updated["voiceover_line"] = " ".join(str(x.get("voiceover") or "").strip() for x in selected).strip()
         updated["caption"] = " ".join(str(x.get("caption") or "").strip() for x in selected).strip()
-        updated["onscreen_copy"] = _joined_onscreen(selected)
+        updated["onscreen_copy"] = ("" if format_data and format_data.get("onscreen_style") == "none"
+                                      else _joined_onscreen(selected))
         segments.append(updated)
     result["segments"] = segments
     if format_data:
@@ -170,6 +171,45 @@ def make_silence(output, duration):
     return output
 
 
+def _last_nonsilent_end(path):
+    """用末尾静音起点估计最后一句结束；没有尾静音时按音频总时长处理。"""
+    duration = _probe_duration(path)
+    result = subprocess.run([
+        "ffmpeg", "-hide_banner", "-v", "info", "-i", str(path),
+        "-af", "silencedetect=noise=-38dB:d=0.25", "-f", "null", "-",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+    starts = [float(value) for value in re.findall(r"silence_start:\s*([0-9.]+)", result.stderr or "")]
+    ends = [float(value) for value in re.findall(r"silence_end:\s*([0-9.]+)", result.stderr or "")]
+    if starts and (len(starts) > len(ends) or starts[-1] > (ends[-1] if ends else -1)):
+        return min(duration, starts[-1])
+    return duration
+
+
+def protect_native_tail(source, output, target_duration, tail_seconds=0.8):
+    """源片超长且会切进末句时整体轻微加速，保留完整音频而不是硬裁。"""
+    source, output = Path(source), Path(output)
+    duration = _probe_duration(source)
+    target = float(target_duration)
+    if duration <= target + 0.03:
+        return source, {"action": "none", "source_duration": duration,
+                        "last_nonsilent_end": _last_nonsilent_end(source)}
+    last_end = _last_nonsilent_end(source)
+    if last_end <= target - float(tail_seconds):
+        return source, {"action": "safe_trim", "source_duration": duration,
+                        "last_nonsilent_end": last_end}
+    speed = duration / target
+    if speed > 2.0:
+        raise ValueError(f"原生成片 {duration:.3f} 秒远超目标 {target:.3f} 秒，无法安全保留末句")
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(source),
+        "-filter_complex", f"[0:v]setpts=PTS/{speed:.8f}[v];[0:a]atempo={speed:.8f}[a]",
+        "-map", "[v]", "-map", "[a]", "-t", f"{target:.3f}",
+        "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(output),
+    ], check=True)
+    return output, {"action": "time_compress", "source_duration": duration,
+                    "last_nonsilent_end": last_end, "speed": round(speed, 6)}
+
+
 def fit_music(source, output, duration):
     """裁切原创配乐，做首尾淡入淡出并统一到约 -16 LUFS。"""
     fade_out = max(0.0, float(duration) - 0.8)
@@ -200,8 +240,9 @@ def make_overlay(output, text, kind="caption"):
         image.save(output)
         return output
     text_path = output.with_suffix(".txt")
-    wrapped = "\n".join(textwrap.wrap(text, width=34, break_long_words=False,
-                                       break_on_hyphens=False)) if kind == "caption" else text
+    width = 34 if kind == "caption" else 20
+    wrapped = "\n".join(textwrap.wrap(str(text), width=width, break_long_words=False,
+                                       break_on_hyphens=False))
     text_path.write_text(wrapped, encoding="utf-8")
     y = "h*0.72" if kind == "caption" else "h*0.10"
     size = "54" if kind == "caption" else "46"
@@ -209,7 +250,8 @@ def make_overlay(output, text, kind="caption"):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                     "color=c=black@0.0:s=1080x1920:d=0.04,format=rgba", "-vf",
                     f"drawtext=font='Arial':textfile='{text_path}':fontcolor=white:fontsize={size}:"
-                    f"x=(w-text_w)/2:y={y}:line_spacing=12:box={box}:boxcolor=black@0.62:boxborderw=22",
+                    f"x=max(w*0.08,min((w-text_w)/2,w*0.92-text_w)):y={y}:line_spacing=12:"
+                    f"box={box}:boxcolor=black@0.62:boxborderw=22:fix_bounds=true",
                     "-frames:v", "1", str(output)], check=True)
     return output
 
@@ -455,7 +497,9 @@ def build(project, brief_path, refs=None, voice="Kore", review=False):
                  if selected_music and selected_music.is_file()
                  else make_silence(work / "silence.wav", rows[-1]["end"]))
     if routes in ({"native"}, {"ambient"}):
-        info = compose_native(raw, music, rows, output, work)
+        protected, tail_info = protect_native_tail(raw, work / "native-tail-safe.mp4", rows[-1]["end"])
+        info = compose_native(protected, music, rows, output, work)
+        info["tail_protection"] = tail_info
     elif routes != {"music"}:
         speech_raw = synthesize_speech(project, " ".join(
             str(segment.get("voiceover_line") or row["caption"]).strip()

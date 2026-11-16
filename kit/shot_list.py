@@ -21,7 +21,8 @@ PROMPT = """你是短视频导演。完整观看并听完给出的对标视频�
 不要为了控制时长拆镜；只有画面实际切镜才新建镜头。起止时间必须首尾相接、覆盖整条视频，不得有空隙或重叠。
 只依据画面和声音，看不清或听不清就写空字符串，不要编造。
 只输出一个 JSON 对象：
-{"duration": 18.2, "summary": "为什么整条视频抓人", "audio_mode":"on_camera_speech|voiceover|special_voice|music_only|ambient", "structure": [
+{"duration": 18.2, "summary": "为什么整条视频抓人", "audio_mode":"on_camera_speech|voiceover|special_voice|music_only|ambient",
+ "must_keep":["必须保留的复刻机制，用可执行画面语言表达；包括对标中的强透视、X 光或溃散效果"], "structure": [
  {"beat":"钩子|证明|行动或其他叙事节拍","start":0.0,"end":4.2}], "shots": [
  {"id":"S01","start":0.0,"end":4.2,"scale":"景别","camera":"机位与运动",
   "action":"动作","product_role":"subject|supporting|none","hand_action":true,"speaker_on_screen":true,
@@ -225,7 +226,11 @@ def validate(data, tolerance=0.08):
     if abs(cursor - duration) > tolerance:
         raise ValueError(f"镜头表结尾 {cursor:g} 与视频时长 {duration:g} 不一致")
     shots[-1]["end"] = round(duration, 3)
+    must_keep = data.get("must_keep") or []
+    if not isinstance(must_keep, list) or not all(isinstance(value, str) and value.strip() for value in must_keep):
+        raise ValueError("must_keep 必须是非空字符串列表或空列表")
     return {**data, "duration": round(duration, 3), "audio_mode": audio_mode,
+            "must_keep": list(dict.fromkeys(value.strip() for value in must_keep)),
             "structure": structure, "shots": shots}
 
 
@@ -291,6 +296,10 @@ def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.med
         raise ValueError("镜头拆解输出不是 JSON 对象")
     parsed["cta_schema_version"] = 1
     result = validate(parsed)
+    if replication_notes:
+        # 用户确认的复刻要点是拆解模型的正式输入，也必须进入下游 must_keep，
+        # 防止只存在于 prompt、计划与评审却看不到。
+        result["must_keep"] = list(dict.fromkeys([*(result.get("must_keep") or []), replication_notes.strip()]))
     if target_duration is not None and abs(result["duration"] - float(target_duration)) > 0.08:
         raise ValueError(f"镜头表时长 {result['duration']:g} 与目标 {float(target_duration):g} 不一致")
     result.update(candidate_id=candidate_id, aweme_id=candidate.get("aweme_id"),
@@ -326,7 +335,28 @@ def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.med
     return result
 
 
+def sync_must_keep(project):
+    """把已由用户确认并送入拆解模型的复刻要点同步进旧运行的 must_keep。"""
+    project = Path(project)
+    data = read_json(project / "shots.json") or {}
+    meta = read_json(project / "project.json", {}) or {}
+    note = str(meta.get("replication_notes") or "").strip()
+    if not note:
+        raise ValueError("project.json 缺少 replication_notes")
+    data["must_keep"] = list(dict.fromkeys([*(data.get("must_keep") or []), note]))
+    write_json(project / "shots.json", data)
+    return data["must_keep"]
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "sync-must-keep":
+        parser = argparse.ArgumentParser(description="把旧运行的复刻要点同步到 shots.json.must_keep")
+        parser.add_argument("sync_must_keep")
+        parser.add_argument("--project", required=True)
+        args = parser.parse_args(argv)
+        print(json.dumps({"must_keep": sync_must_keep(args.project)}, ensure_ascii=False, indent=2))
+        return 0
     parser = argparse.ArgumentParser(description="完整读取对标视频并输出连续镜头表")
     parser.add_argument("--project", required=True)
     parser.add_argument("--batch", required=True)

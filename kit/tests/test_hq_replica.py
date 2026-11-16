@@ -40,6 +40,23 @@ def shots():
 
 
 class ShotListValidation(unittest.TestCase):
+    def test_must_keep_is_normalized_for_plan_and_prompt_requests_it(self):
+        data = shots(); data["must_keep"] = ["strong X-ray cutaway and villain disintegration"]
+        result = shot_list.validate(data)
+        self.assertEqual(result["must_keep"], data["must_keep"])
+        self.assertIn('"must_keep"', shot_list.breakdown_prompt(20))
+
+    def test_sync_must_keep_migrates_existing_run_from_replication_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "shots.json").write_text(json.dumps({"shots": []}), encoding="utf-8")
+            (root / "project.json").write_text(json.dumps({"replication_notes": "strong X-ray disintegration"}),
+                                               encoding="utf-8")
+            values = shot_list.sync_must_keep(root)
+            saved = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+        self.assertEqual(values, ["strong X-ray disintegration"])
+        self.assertEqual(saved["must_keep"], values)
+
     def test_accepts_continuous_timeline(self):
         result = shot_list.validate(shots())
         self.assertEqual(result["shots"][-1]["end"], 12)
@@ -132,6 +149,20 @@ class ShotListValidation(unittest.TestCase):
 
 
 class ShotPlanRoutes(unittest.TestCase):
+    def test_product_detail_crops_create_box_and_label_references(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "product.jpg"
+            Image.new("RGB", (1000, 1200), "white").save(source)
+            outputs = shot_plan.prepare_product_detail_refs([source], root / "details")
+            sizes = []
+            for path in outputs:
+                with Image.open(path) as image:
+                    sizes.append(image.size)
+        self.assertEqual([Path(path).name for path in outputs], ["box-front.jpg", "bottle-label.jpg"])
+        self.assertEqual(sizes, [(530, 1152), (350, 912)])
+
     def test_fractional_units_preserve_total_target_duration(self):
         self.assertEqual(shot_plan.allocate_request_durations([6.5, 6.5, 7.0], 20), [7, 6, 7])
         with self.assertRaisesRegex(ValueError, "无法分配"):
@@ -197,6 +228,26 @@ class ComposeTimeline(unittest.TestCase):
             rendered = output.with_suffix(".txt").read_text(encoding="utf-8")
         self.assertIn("\n", rendered)
         self.assertTrue(all(len(line) <= 34 for line in rendered.splitlines()))
+
+    def test_text_overlay_is_static_wrapped_and_tail_is_not_hard_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); overlay = root / "copy.png"
+            with mock.patch.object(compose.subprocess, "run") as run:
+                compose.make_overlay(overlay, "PLEASE DO NOT BUY THIS PRODUCT", "copy")
+            rendered = overlay.with_suffix(".txt").read_text(encoding="utf-8")
+            self.assertIn("\n", rendered)
+            command = run.call_args.args[0]
+            self.assertIn("fix_bounds=true", command[command.index("-vf") + 1])
+
+            source, output = root / "raw.mp4", root / "safe.mp4"
+            source.write_bytes(b"raw")
+            with mock.patch.object(compose, "_probe_duration", return_value=21.2), \
+                 mock.patch.object(compose, "_last_nonsilent_end", return_value=20.8), \
+                 mock.patch.object(compose.subprocess, "run") as fit:
+                protected, info = compose.protect_native_tail(source, output, 20)
+            self.assertEqual(protected, output)
+            self.assertEqual(info["action"], "time_compress")
+            self.assertIn("atempo=1.06000000", " ".join(fit.call_args.args[0]))
 
     def test_composed_job_records_export_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:

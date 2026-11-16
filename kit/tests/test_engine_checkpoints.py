@@ -107,6 +107,19 @@ class CheckpointRules(StudioCase):
 
 
 class EngineRules(StudioCase):
+    def test_character_reference_is_budgeted_as_separate_image(self):
+        briefs = self.run / "briefs"; briefs.mkdir()
+        path = briefs / "hq.json"
+        path.write_text(json.dumps({"id": "hq", "characters": [{"name": "Lead"}], "segments": [
+            {"duration": 5, "video_route": "quality", "resolution": "960p", "estimated_cny": 1.15}
+        ]}), encoding="utf-8")
+        with mock.patch.object(settings, "image_price", return_value=0.5):
+            budget = engine._budget_details([path])
+        kinds = [row["kind"] for row in budget["units"]]
+        self.assertIn("character_reference", kinds)
+        character = next(row for row in budget["units"] if row["kind"] == "character_reference")
+        self.assertEqual(character["totalCny"], 0.5)
+
     def test_engine_briefs_exclude_generated_segment_children(self):
         briefs = self.run / "briefs"; briefs.mkdir()
         parent = briefs / "hq.json"

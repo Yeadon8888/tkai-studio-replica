@@ -60,8 +60,10 @@ def _budget_details(brief_paths):
     """预算同时列出视频、定场图、TTS 与配乐；任一价格未知时总额保持未知。"""
     units = []
     needs_tts = False
+    needs_characters = False
     for path in brief_paths:
         brief = read_json(path, {}) or {}
+        needs_characters = needs_characters or bool(brief.get("characters"))
         segments = brief.get("segments") or []
         if segments:
             for index, segment in enumerate(segments, 1):
@@ -98,6 +100,10 @@ def _budget_details(brief_paths):
     units.append({"kind": "keyframe", "id": "scene", "model": settings.model("image"),
                   "duration": None, "unitPrice": settings.image_price(),
                   "totalCny": settings.image_price()})
+    if needs_characters:
+        units.append({"kind": "character_reference", "id": "characters", "model": settings.model("image"),
+                      "duration": None, "unitPrice": settings.image_price(),
+                      "totalCny": settings.image_price()})
     if needs_tts:
         units.append({"kind": "tts", "id": "voiceover", "model": settings.model("tts"),
                       "duration": None, "unitPrice": settings.tts_price(),
@@ -443,6 +449,14 @@ def status(product, run=None):
                   "action": {"type": "paid", "command": [sys.executable, str(KIT / "keyframe.py"), "scene",
                              "--project", str(run_dir), "--product-reference", refs[0]],
                              "summary": "生成共用定场图后停止", "estimated_cny": settings.image_price(),
+                             "approval": budget_cp["id"]}}
+        return _with_manual(result)
+    needs_characters = any(bool((read_json(path, {}) or {}).get("characters")) for path in briefs)
+    if not takes and needs_characters and not (run_dir / "characters.png").exists():
+        result = {**base, "stage": "keyframe", "stage_label": STAGE_LABELS["keyframe"],
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "keyframe.py"), "characters",
+                             "--project", str(run_dir)],
+                             "summary": "生成全角色同框设定图后停止", "estimated_cny": settings.image_price(),
                              "approval": budget_cp["id"]}}
         return _with_manual(result)
     if not takes:

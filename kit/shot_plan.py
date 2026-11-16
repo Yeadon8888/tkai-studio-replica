@@ -18,6 +18,9 @@ import shot_list  # noqa: E402
 
 NO_TEXT = "Do not render captions, letters, numbers, logos or watermarks."
 NO_VOICE = "No dialogue, no speech, no singing, no voice-over; only quiet natural ambient sound."
+PRODUCT_LABEL_LOCK = "Keep label text exactly as in the reference photo; do not invent, transcribe or describe small label text."
+SPEECH_RATE_WPS = 2.6
+SPEECH_TAIL_SECONDS = 0.8
 
 
 def _duration(shot):
@@ -110,6 +113,38 @@ def _script_rows(script_data):
     return {str(row.get("id")): row for row in script_data.get("shots") or []}
 
 
+def prepare_product_detail_refs(product_refs, output_dir):
+    """从包含盒子和瓶身的真实产品合照生成两个本地特写，不产生远程费用。"""
+    from PIL import Image
+    candidates = []
+    for value in product_refs:
+        path = Path(value).expanduser().resolve()
+        try:
+            with Image.open(path) as image:
+                candidates.append((image.width * image.height, path))
+        except (OSError, ValueError):
+            continue
+    if not candidates:
+        raise ValueError("真实产品图无法读取，不能生成产品细节特写")
+    source = max(candidates)[1]
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    crops = (("box-front.jpg", (0.00, 0.02, 0.53, 0.98)),
+             ("bottle-label.jpg", (0.49, 0.20, 0.84, 0.96)))
+    outputs = []
+    with Image.open(source) as image:
+        image = image.convert("RGB")
+        for name, box in crops:
+            out = output_dir / name
+            if not out.exists():
+                width, height = image.size
+                pixels = (round(box[0] * width), round(box[1] * height),
+                          round(box[2] * width), round(box[3] * height))
+                image.crop(pixels).save(out, quality=95)
+            outputs.append(str(out.resolve()))
+    return outputs
+
+
 def _estimate(route, resolution, duration):
     price = settings.video_unit_price(settings.video_route_model(route), resolution)
     return round(price * duration, 4) if price is not None else None
@@ -170,7 +205,7 @@ def first_last_audio_evidence():
 
 
 def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scene_path=None, seed=None,
-              first_last_audio=None):
+              first_last_audio=None, character_ref=None, product_detail_refs=()):
     shots_data = shot_list.validate(shots_data)
     shots = shots_data.get("shots") or []
     rows = _script_rows(script_data)
@@ -192,6 +227,10 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
     selected_audio = ("native" if shot_list.all_speech_is_on_camera(shots_data)
                       else audio_route(shots_data["audio_mode"]))
     first_last_audio = first_last_audio or {"usable": False, "reason": "未提供 first-last 原声音轨证据"}
+    character_map = {str(row.get("name")): str(row.get("appearance"))
+                     for row in script_data.get("characters") or [] if row.get("name") and row.get("appearance")}
+    character_image = str(Path(character_ref).expanduser().resolve()) if character_ref else None
+    detail_refs = [str(Path(path).expanduser().resolve()) for path in product_detail_refs]
     segments = []
     for group_index, group in enumerate(groups, 1):
         chunks = split_group(group)
@@ -210,6 +249,11 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
             for atom, row in zip(chunk, script_rows):
                 part = f" Part {atom['part']} of {atom['parts']}." if atom["parts"] > 1 else ""
                 visual = str(row["visual_prompt"]).strip()
+                names = row.get("characters") or []
+                descriptions = [character_map[name] for name in names if name in character_map]
+                if descriptions:
+                    visual += " Character continuity: " + " ".join(descriptions)
+                visual += " " + PRODUCT_LABEL_LOCK
                 if shots_data["audio_mode"] in ("music_only", "ambient") and not visual.endswith(NO_VOICE):
                     visual = f"{visual.rstrip('.')}. {NO_VOICE}"
                 timed.append(f"{cursor:.1f}-{cursor + atom['duration']:.1f}s:{part} {visual}")
@@ -244,7 +288,12 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
                 segment["audio_route"] = "tts"
                 segment["audio_route_reason"] = first_last_audio.get("reason") or "first-last 原声不可用"
             if route == "quality":
-                segment["images"] = [str(scene)] + refs[:8]
+                ordered = [str(scene)]
+                if character_image:
+                    ordered.append(character_image)
+                ordered.extend(refs)
+                ordered.extend(detail_refs)
+                segment["images"] = list(dict.fromkeys(ordered))[:9]
             else:
                 segment.update(first_frame="chain:prev", last_frame="chain:end")
             segments.append(segment)
@@ -252,6 +301,13 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
     allocated = allocate_request_durations([row["source_duration"] for row in segments], target_duration)
     for segment, request_duration in zip(segments, allocated):
         segment["duration"] = request_duration
+        words = re.findall(r"\b[\w'-]+\b", segment.get("voiceover_line") or "")
+        required = len(words) / SPEECH_RATE_WPS + (SPEECH_TAIL_SECONDS if words else 0.0)
+        if required > request_duration + 1e-9:
+            raise ValueError(f"{segment['shot_id']} 口播至少需要 {required:.2f} 秒（含 {SPEECH_TAIL_SECONDS:g} 秒收尾），"
+                             f"单元只有 {request_duration:g} 秒；请让脚本模型缩短台词")
+        segment["speech_required_seconds"] = round(required, 3)
+        segment["speech_tail_seconds"] = SPEECH_TAIL_SECONDS if words else 0.0
         segment["estimated_cny"] = _estimate(segment["video_route"], segment["resolution"], request_duration)
     validate_durations(segments)
     estimates = [row["estimated_cny"] for row in segments]
@@ -263,7 +319,11 @@ def make_plan(shots_data, script_data, product_refs, brief_id="hq-replica", scen
         "source_duration": round(sum(_duration(x) for x in shots), 3),
         "aspect_ratio": "9:16", "resolution": "960p", "segments": segments,
         "voiceover_lines": [x["voiceover_line"] for x in segments],
-        "must_keep": [shot.get("action", "") for shot in shots if shot.get("keep") == "keep"],
+        "must_keep": list(dict.fromkeys([*(shots_data.get("must_keep") or []),
+                         *(shot.get("action", "") for shot in shots if shot.get("keep") == "keep")])),
+        "characters": script_data.get("characters") or [],
+        "character_reference": character_image,
+        "product_detail_references": detail_refs,
         "replication_reference": shots_data.get("source_video_url") or shots_data.get("reference_url"),
         "replication_reference_file": shots_data.get("source_video_file") or "benchmark/video.mp4",
         "shot_list": "shots.json", "script": "script.json", "scene": str(scene),
@@ -282,9 +342,12 @@ def build(project, product_refs, brief_id="hq-replica", scene_path=None, seed=No
     script = read_json(script_path)
     if not script:
         raise FileNotFoundError(f"缺少 script.json；请先运行 script_writer.py：{script_path}")
+    detail_refs = prepare_product_detail_refs(product_refs, project / "product-details")
+    character_ref = project / "characters.png" if script.get("characters") else None
     plan = make_plan(shots, script, product_refs, brief_id=brief_id,
                      scene_path=scene_path or project / "scene.png", seed=seed,
-                     first_last_audio=first_last_audio_evidence())
+                     first_last_audio=first_last_audio_evidence(), character_ref=character_ref,
+                     product_detail_refs=detail_refs)
     destination = project / "briefs" / f"{brief_id}.json"
     write_json(destination, plan)
     return destination, plan

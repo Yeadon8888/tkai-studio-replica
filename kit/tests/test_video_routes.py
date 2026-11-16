@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -109,6 +110,39 @@ class VideoRequestRoutes(unittest.TestCase):
         brief["audio_urls"] = ["data:audio/wav;base64,UklGRg=="]
         _, body = loop.build_video_request(brief)
         self.assertEqual(body["audio_urls"], brief["audio_urls"])
+
+    def test_submission_placeholder_precedes_post_and_timeout_never_resubmits(self):
+        brief = self.briefs()["quality"]
+        brief["id"] = "safe-submit"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "run"; (project / "briefs").mkdir(parents=True)
+            path = project / "briefs/safe-submit.json"; path.write_text(json.dumps(brief), encoding="utf-8")
+            args = argparse.Namespace(project=str(project), brief=str(path), cap=1,
+                                      interval=0, max_polls=0, no_review=True)
+            observed = {}
+            def timeout_after_placeholder(method, _path, _body=None):
+                observed.update(json.loads((project / "jobs/safe-submit.json").read_text()))
+                raise urllib.error.URLError("write timeout")
+            with mock.patch.object(loop, "_api", side_effect=timeout_after_placeholder), \
+                 mock.patch.object(loop, "recover_recent_submission", return_value={"status": "unsupported"}), \
+                 mock.patch.object(loop, "_check_generation_budget"), \
+                 mock.patch.object(loop.ledger, "append"):
+                loop._generate_single(args)
+            saved = json.loads((project / "jobs/safe-submit.json").read_text())
+        self.assertEqual(observed["status"], "submitting")
+        self.assertEqual(saved["status"], "submission_unknown")
+        self.assertEqual(saved["recovery"]["status"], "unsupported")
+
+    def test_recent_task_recovery_requires_one_same_model_time_match(self):
+        now = "2026-11-16T01:48:14+08:00"
+        payload = {"data": [{"id": "task-near", "model": settings.video_route_model("quality"),
+                             "created_at": "2026-11-15T17:48:20+00:00", "status": "processing"},
+                            {"id": "task-other", "model": "other-model",
+                             "created_at": "2026-11-15T17:48:20+00:00"}]}
+        with mock.patch.object(loop, "_api", return_value=payload):
+            result = loop.recover_recent_submission(settings.video_route_model("quality"), now)
+        self.assertEqual(result["status"], "recovered")
+        self.assertEqual(result["task_id"], "task-near")
 
 
 class PriceAndBudget(unittest.TestCase):

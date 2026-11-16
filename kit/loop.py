@@ -443,6 +443,54 @@ def _safe_request(body):
     return out
 
 
+def _task_rows(value):
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if isinstance(value, dict):
+        for key in ("data", "items", "tasks", "videos"):
+            rows = value.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _parse_api_time(value):
+    if isinstance(value, (int, float)):
+        return dt.datetime.fromtimestamp(float(value), dt.timezone.utc)
+    text = str(value or "").strip().replace("Z", "+00:00")
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def recover_recent_submission(model, submitted_at):
+    """按模型和提交时间查询最近任务；列表接口不支持时明确返回，不猜任务号。"""
+    try:
+        payload = _api("GET", "/v1/videos?limit=20")
+    except urllib.error.HTTPError as exc:
+        return {"status": "unsupported" if exc.code in (404, 405) else "http_error", "http_status": exc.code}
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        return {"status": "unavailable", "error": type(exc).__name__}
+    start = _parse_api_time(submitted_at)
+    matches = []
+    for row in _task_rows(payload):
+        row_model = str(row.get("model") or row.get("endpoint") or "")
+        created = _parse_api_time(row.get("created_at") or row.get("createdAt") or row.get("created"))
+        task_id = row.get("id") or row.get("task_id")
+        if not task_id or row_model != str(model) or not start or not created:
+            continue
+        delta = (created.astimezone(dt.timezone.utc) - start.astimezone(dt.timezone.utc)).total_seconds()
+        if -30 <= delta <= 15 * 60:
+            matches.append((abs(delta), str(task_id), row))
+    if len(matches) != 1:
+        return {"status": "not_found" if not matches else "ambiguous", "matches": len(matches)}
+    _, task_id, row = matches[0]
+    return {"status": "recovered", "task_id": task_id,
+            "task_status": str(row.get("status") or "submitted").lower()}
+
+
 def _generate_single(a):
     project = Path(a.project)
     brief = _read(a.brief)
@@ -466,7 +514,26 @@ def _generate_single(a):
         job = _read(job_path) if job_path.exists() else {"task_id": "?", "status": "claiming"}
         print(f"{tid} 已有提交占位或任务 {job.get('task_id')}（状态 {job.get('status')}），不重复提交")
         if not job_path.exists() or not job.get("task_id") or job.get("task_id") == "?":
-            return  # 只有占位、没有任务号：不能轮询，交给人（占位文件保留，避免重复提交）
+            try:
+                route, body = build_video_request(brief)
+                submitted_at = claim.read_text(encoding="utf-8").strip()
+                recovery = recover_recent_submission(body["model"], submitted_at)
+            except (OSError, TypeError, ValueError) as exc:
+                recovery = {"status": "unavailable", "error": type(exc).__name__}
+                route, body, submitted_at = brief.get("video_route", "default"), {}, ""
+            if recovery.get("status") != "recovered":
+                _write(job_path, {"id": tid, "status": "submission_unknown", "model": body.get("model"),
+                                  "video_route": route, "submit_started_at": submitted_at,
+                                  "recovery": recovery, "request": _safe_request(body) if body else {}})
+                print(f"{tid} 提交结果未知；最近任务查询={recovery.get('status')}，不盲目重提")
+                return
+            job = {"id": tid, "task_id": recovery["task_id"], "model": body["model"],
+                   "video_route": route, "resolution": body.get("resolution"),
+                   "status": recovery.get("task_status") or "submitted", "submitted_at": submitted_at,
+                   "recovery": recovery, "request": _safe_request(body)}
+            _write(job_path, job)
+            ledger.append("tokensfactory", body["model"], "submitted", project=project.name, ref=tid,
+                          units=body.get("duration"), kind="video", resolution=body.get("resolution"))
     else:
         if a.cap < 1:
             sys.exit("预算上限为 0，拒绝提交")
@@ -482,18 +549,40 @@ def _generate_single(a):
         model = body["model"]
         duration = body.get("duration")
         resolution = body.get("resolution")
+        submit_started_at = _now()
+        job = {"id": tid, "model": model, "video_route": route, "resolution": resolution,
+               "status": "submitting", "submit_started_at": submit_started_at,
+               "route_notice": brief.get("route_notice"), "request": _safe_request(body)}
+        _write(job_path, job)
         try:
             js = _api("POST", "/v1/videos", body)
         except urllib.error.HTTPError as e:
+            job.update(status="failed", http_status=e.code, failed_at=_now())
+            _write(job_path, job)
             ledger.append("tokensfactory", model, e.code, project=project.name, ref=tid, units=0,
                           kind="video", resolution=resolution)
             sys.exit(f"提交失败 HTTP {e.code}，不重试")
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            recovery = recover_recent_submission(model, submit_started_at)
+            if recovery.get("status") == "recovered":
+                js = {"id": recovery["task_id"]}
+                job["recovery"] = recovery
+            else:
+                job.update(status="submission_unknown", last_error=type(exc).__name__, recovery=recovery)
+                _write(job_path, job)
+                print(f"{tid} 提交超时且最近任务查询={recovery.get('status')}，结果未知，不重提")
+                return
         task_id = js.get("id") or js.get("task_id") or (js.get("data") or {}).get("id")
         if not task_id:
-            sys.exit(f"提交返回里没有任务号：{str(js)[:200]}")
-        job = {"id": tid, "task_id": task_id, "model": model, "video_route": route,
-               "resolution": resolution, "status": "submitted", "submitted_at": _now(),
-               "route_notice": brief.get("route_notice"), "request": _safe_request(body)}
+            recovery = recover_recent_submission(model, submit_started_at)
+            if recovery.get("status") != "recovered":
+                job.update(status="submission_unknown", recovery=recovery, response_without_task_id=True)
+                _write(job_path, job)
+                print(f"{tid} 提交响应没有任务号且最近任务查询={recovery.get('status')}，不重提")
+                return
+            task_id = recovery["task_id"]
+            job["recovery"] = recovery
+        job.update(task_id=task_id, status="submitted", submitted_at=_now())
         if brief.get("chain_source"):
             job["chain_source"] = brief["chain_source"]
         _write(job_path, job)

@@ -87,6 +87,29 @@ class ScriptBlockingValidation(unittest.TestCase):
         self.assertTrue(any("非空口播段数" in x for x in script_writer.validate(
             self.valid, self.source, self.facts)))
 
+    def test_character_table_overlay_limit_and_tail_margin_are_blocking(self):
+        self.source["shots"][0]["speaker_on_screen"] = True
+        value = json.loads(json.dumps(self.valid))
+        value["characters"] = [{"name": "Lead", "appearance": "a tiny yellow suited villain",
+                                "first_shot": "S01"}]
+        value["shots"][0]["characters"] = ["Lead"]
+        value["shots"][0]["visual_prompt"] = (
+            "A hand moves the product. The person says in English, in a tense tone: 'Test 16 parameters'")
+        self.assertEqual(script_writer.validate(value, self.source, self.facts), [])
+
+        unknown = json.loads(json.dumps(value)); unknown["shots"][0]["characters"] = ["Gray Face"]
+        self.assertTrue(any("未登记角色" in error for error in script_writer.validate(
+            unknown, self.source, self.facts)))
+        long_copy = json.loads(json.dumps(value))
+        long_copy["shots"][0]["onscreen_copy"] = "one two three four five six seven eight"
+        self.assertTrue(any("最多 7" in error for error in script_writer.validate(
+            long_copy, self.source, self.facts)))
+        too_long = json.loads(json.dumps(value))
+        too_long["shots"][0]["voiceover"] = "one two three four five six seven eight nine"
+        too_long["shots"][0]["caption"] = too_long["shots"][0]["voiceover"]
+        self.assertTrue(any("收尾余量" in error for error in script_writer.validate(
+            too_long, self.source, self.facts)))
+
     def test_rewrites_once_then_writes_trace(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -212,6 +235,35 @@ class ContinuityPlan(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "真实产品图"):
                 shot_plan.make_plan(shots(rows), script_for(rows), [], scene_path=scene)
 
+    def test_character_description_and_reference_order_reach_every_segment(self):
+        rows = [shot("S01", 0, 5), shot("S02", 5, 10)]
+        script = script_for(rows)
+        appearance = "a tiny yellow villain in the same mustard suit and red tie"
+        script["characters"] = [{"name": "Lead", "appearance": appearance, "first_shot": "S01"}]
+        for row in script["shots"]:
+            row["characters"] = ["Lead"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ref, scene = self._assets(root)
+            character = root / "characters.png"; character.write_bytes(b"characters")
+            detail = root / "label.jpg"; detail.write_bytes(b"detail")
+            plan = shot_plan.make_plan(shots(rows), script, [ref], scene_path=scene, seed=3,
+                                       character_ref=character, product_detail_refs=[detail])
+        for segment in plan["segments"]:
+            self.assertIn(appearance, segment["prompt"])
+            self.assertIn("label text exactly as in the reference photo", segment["prompt"])
+            self.assertEqual(segment["images"][:3],
+                             [str(scene.resolve()), str(character.resolve()), str(ref.resolve())])
+            self.assertEqual(segment["images"][3], str(detail.resolve()))
+
+    def test_plan_rejects_voice_without_tail_margin(self):
+        rows = [shot("S01", 0, 2)]
+        script = script_for(rows)
+        script["shots"][0]["voiceover"] = "one two three four"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ref, scene = self._assets(root)
+            with self.assertRaisesRegex(ValueError, "缩短台词"):
+                shot_plan.make_plan(shots(rows), script, [ref], scene_path=scene, seed=1)
+
     def test_seed_reaches_quality_and_keyframe_requests(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -295,6 +347,26 @@ class SceneKeyframe(unittest.TestCase):
                  mock.patch.object(keyframe.settings, "get", return_value="9:16"):
                 path = keyframe.generate_scene(root, product, edit=lambda ref, prompt, size: b"png")
             self.assertEqual(path, (root / "scene.png").resolve())
+
+    def test_character_sheet_uses_model_descriptions_without_product(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "script.json").write_text(json.dumps({"characters": [
+                {"name": "Lead", "appearance": "tiny yellow suit", "first_shot": "S01"},
+                {"name": "Chlorine", "appearance": "spiky green body", "first_shot": "S02"},
+            ]}), encoding="utf-8")
+            seen = {}
+            def generate(prompt, size):
+                seen.update(prompt=prompt, size=size)
+                return b"png"
+            with mock.patch.object(keyframe, "normalize_aspect"), \
+                 mock.patch.object(keyframe, "_append_image_ledger"), \
+                 mock.patch.object(keyframe.settings, "get", return_value="9:16"):
+                path = keyframe.generate_characters(root, generate=generate)
+        self.assertEqual(path, (root / "characters.png").resolve())
+        self.assertIn("tiny yellow suit", seen["prompt"])
+        self.assertIn("spiky green body", seen["prompt"])
+        self.assertIn("No product", seen["prompt"])
 
 
 if __name__ == "__main__":

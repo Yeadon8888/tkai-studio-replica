@@ -28,6 +28,9 @@ NAMED_PRODUCT = re.compile(
     r"([Pp]roduct|[Bb]ottle|[Kk]it|[Ss]trips?)\b")
 NO_VOICE = "No dialogue, no speech, no singing, no voice-over; only quiet natural ambient sound."
 MUSIC_FIELDS = ("mood", "tempo_bpm", "era_style", "instruments", "energy_curve")
+CHARACTER_FIELDS = ("name", "appearance", "first_shot")
+MAX_OVERLAY_WORDS = 7
+SPEECH_TAIL_SECONDS = 0.8
 
 
 def _compact_number(value):
@@ -145,6 +148,27 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
     if not isinstance(rows, list) or len(rows) != len(source_shots):
         return [f"shots 必须有 {len(source_shots)} 段"]
     by_id = {str(row.get("id")): row for row in rows if isinstance(row, dict)}
+    source_ids = [str(row.get("id")) for row in source_shots]
+    needs_characters = any(bool(row.get("speaker_on_screen")) or row.get("characters")
+                           for row in source_shots)
+    character_rows = script.get("characters")
+    characters = {}
+    if needs_characters and (not isinstance(character_rows, list) or not character_rows):
+        errors.append("characters 必须是非空角色设定表")
+    for index, character in enumerate(character_rows or [], 1):
+        if not isinstance(character, dict):
+            errors.append(f"第 {index} 个角色不是对象")
+            continue
+        missing = [field for field in CHARACTER_FIELDS if not str(character.get(field) or "").strip()]
+        if missing:
+            errors.append(f"第 {index} 个角色缺字段：{', '.join(missing)}")
+            continue
+        name = str(character["name"]).strip()
+        if name in characters:
+            errors.append(f"角色名重复：{name}")
+        if str(character["first_shot"]) not in source_ids:
+            errors.append(f"角色 {name} 的 first_shot 不在镜头表中")
+        characters[name] = character
     fact_blob = _facts_text(facts).lower()
     fact_numbers = {_compact_number(x) for x in NUMBER.findall(fact_blob)}
     terms = [str(x).strip().lower() for x in competitor_terms if len(str(x).strip()) >= 2]
@@ -171,9 +195,16 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
         voice = str(row.get("voiceover") or "").strip()
         actual_voice += bool(voice)
         words = re.findall(r"\b[\w'-]+\b", voice)
-        limit = (float(shot["end"]) - float(shot["start"])) * 2.6
+        limit = max(0.0, float(shot["end"]) - float(shot["start"]) - SPEECH_TAIL_SECONDS) * 2.6
         if len(words) > limit + 1e-9:
-            errors.append(f"{sid} 口播 {len(words)} 词，超过上限 {limit:.1f}")
+            errors.append(f"{sid} 口播 {len(words)} 词，超过上限 {limit:.1f}（含 {SPEECH_TAIL_SECONDS:g} 秒收尾余量）")
+        appearing = row.get("characters", [])
+        if needs_characters and not isinstance(appearing, list):
+            errors.append(f"{sid} characters 必须是角色名列表")
+            appearing = []
+        unknown = [str(name) for name in appearing if str(name) not in characters]
+        if unknown:
+            errors.append(f"{sid} 出现未登记角色：{', '.join(unknown)}")
         visual = str(row.get("visual_prompt") or "").strip()
         if not visual:
             errors.append(f"{sid} visual_prompt 不能为空")
@@ -244,6 +275,17 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
                 errors.append(f"{sid} 不在对标贴纸时段，onscreen_copy 必须为空")
         elif isinstance(value, dict):
             errors.append(f"{sid} 对标不是回复评论贴纸，onscreen_copy 必须是字符串")
+        elif format_data.get("onscreen_style") == "text_overlay" and format_invariants.text_value(value):
+            words = re.findall(r"\b[\w'-]+\b", str(value))
+            if len(words) > MAX_OVERLAY_WORDS:
+                errors.append(f"{sid} onscreen_copy {len(words)} 词，普通文字叠加最多 {MAX_OVERLAY_WORDS} 个英文词")
+    for name, character in characters.items():
+        appearances = [str(row.get("id")) for row in rows
+                       if isinstance(row.get("characters"), list) and name in row["characters"]]
+        if not appearances:
+            errors.append(f"角色 {name} 没有出现在任何镜头")
+        elif appearances[0] != str(character.get("first_shot")):
+            errors.append(f"角色 {name} 的 first_shot 应为 {appearances[0]}")
     return list(dict.fromkeys(errors))
 
 
@@ -304,7 +346,8 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
                     '{"style":"reply_sticker","handle":"@虚构用户名","comment":"一句虚构评论"}；'
                     "其它镜头必须为空字符串；评论只对应原评论意图，不得照抄原文或真实用户名。"
                     if format_data.get("onscreen_style") == "reply_sticker" else
-                    "onscreen_copy 在普通文字叠加时输出英文字符串，对标无屏幕文字时输出空字符串。")
+                    f"onscreen_copy 在普通文字叠加时输出不超过 {MAX_OVERLAY_WORDS} 个英文词的短标题，"
+                    "不得复述整句台词；对标无屏幕文字时输出空字符串。")
     caption_rule = ("对标无连续字幕，所有 caption 必须是空字符串。" if not format_data.get("captions")
                     else "对标有连续字幕，caption 保持与对标一致的出现方式。")
     cta_rule = ("CTA kind 必须是 reverse：保留至少一个反派反向求饶、求观众别买或别测的 CTA，"
@@ -317,13 +360,15 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
 {cta_rule}
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
-镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词。
+镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词，并为每个生成单元结尾预留至少 {SPEECH_TAIL_SECONDS:g} 秒无台词余量。
 镜头的 speaker_on_screen=true 且 voiceover 非空时，必须把完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。只有说话者不在画面中时才是画外音。
 speaker_on_screen=false 的 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
+输出 characters 角色设定表；每个角色包含 name、固定英文 appearance、first_shot。每镜 characters 只列本镜实际出现的角色名，所有名字必须来自角色设定表；跨镜角色不得改变 appearance。
+产品标签只允许描述为 "label text exactly as in the reference photo"，不得在 visual_prompt 中编写或猜测标签小字。
 每镜输出 cta={{"present":true|false,"kind":"direct|reverse|none","evidence":"本镜台词或画面文字原文，无则空字符串"}}。
-只输出 JSON：{{"scene":"...","music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"...","cta":{{"present":false,"kind":"none","evidence":""}}}}]}}
+只输出 JSON：{{"scene":"...","characters":[{{"name":"Lead","appearance":"fixed English appearance","first_shot":"S01"}}],"music":{{"mood":"...","tempo_bpm":90,"era_style":"...","instruments":["..."],"energy_curve":"..."}},"shots":[{{"id":"S01","characters":["Lead"],"visual_prompt":"...","voiceover":"...","caption":"...","onscreen_copy":"字符串、空字符串或上述贴纸对象","end_state":"...","cta":{{"present":false,"kind":"none","evidence":""}}}}]}}
 竞品词：{json.dumps(terms, ensure_ascii=False)}
 产品事实：{json.dumps(facts, ensure_ascii=False)}
 镜头表：{json.dumps(shots_data, ensure_ascii=False)}{human_feedback}{correction}"""
