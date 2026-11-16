@@ -46,7 +46,7 @@ DEFAULTS = {
     "MODEL_CRITIC": "",
     "MODEL_REVIEW": "",
     "MODEL_REVISE": "",
-    "MODEL_SCRIPT": "",
+    "MODEL_SCRIPT": "gemini-3.8-flash-low",
     "MODEL_ANCHOR": "",
     "MODEL_AUDIO_CHECK": "",
     "MODEL_TRANSCRIBE": "gemini-3.8-flash",

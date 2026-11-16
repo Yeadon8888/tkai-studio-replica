@@ -32,11 +32,33 @@ def read_anchor(directory):
     return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
 
 
-def http_json(method, url, headers, body=None, timeout=30):
+def http_request(url, data=None, method=None, headers=None):
+    """构造唯一的对外 HTTP 请求。
+
+    无论调用方是否传入 User-Agent，都统一使用配置的 HTTP_USER_AGENT，
+    避免 Python 默认 UA 被 Cloudflare 拒绝。
+    """
+    import settings  # 延迟导入，避免工具模块初始化循环
+    request = url if isinstance(url, urllib.request.Request) else urllib.request.Request(
+        str(url), data=data, method=method, headers=headers or {})
+    if isinstance(url, urllib.request.Request):
+        for key, value in (headers or {}).items():
+            request.add_header(key, value)
+    request.remove_header("User-agent")
+    request.add_header("User-Agent", settings.get("HTTP_USER_AGENT"))
+    return request
+
+
+def http_open(url, data=None, method=None, headers=None, timeout=30, opener=None):
+    """统一打开对外 HTTP 请求；返回的响应由调用方关闭。"""
+    request = http_request(url, data=data, method=method, headers=headers)
+    return (opener or urllib.request.urlopen)(request, timeout=timeout)
+
+
+def http_json(method, url, headers=None, body=None, timeout=30, opener=None):
     """发送 HTTP 请求并解析 JSON；非 JSON/网络错误原样抛给调用方。"""
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with http_open(url, data=data, method=method, headers=headers, timeout=timeout, opener=opener) as response:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 

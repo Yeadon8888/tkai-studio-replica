@@ -27,6 +27,7 @@ PROMPT = """你是短视频导演。完整观看并听完给出的对标视频�
  {"id":"S01","start":0.0,"end":4.2,"scale":"景别","camera":"机位与运动",
   "action":"动作","product_role":"subject|supporting|none","hand_action":true,"speaker_on_screen":true,
   "onscreen_text":"原画面文字","voiceover":"口播原文","music_sfx":"音乐与音效",
+  "benefit_claim":{"present":true,"evidence":"本镜台词中的产品作用原文，无则空字符串"},
   "cta":{"present":true,"kind":"direct|reverse|none","evidence":"台词或画面文字原文"},
   "rhythm":"节奏点","hook_reason":"为什么抓人","join":"cut|continuous|match_cut",
   "keep":"keep|redo","redo_reason":"redo 时说明不适配原因，否则空字符串",
@@ -218,6 +219,15 @@ def validate(data, tolerance=0.08):
             cta_error = validate_cta(row.get("cta"), cta_text)
             if cta_error:
                 raise ValueError(f"第 {index} 个镜头 {cta_error}")
+        if data.get("benefit_claim_schema_version") or "benefit_claim" in row:
+            claim = row.get("benefit_claim")
+            if not isinstance(claim, dict) or not isinstance(claim.get("present"), bool):
+                raise ValueError(f"第 {index} 个镜头 benefit_claim 必须含 present 布尔值和 evidence")
+            evidence = str(claim.get("evidence") or "").strip()
+            if claim["present"] != bool(evidence):
+                raise ValueError(f"第 {index} 个镜头 benefit_claim.present 必须与 evidence 一致")
+            if evidence and evidence.lower() not in str(row.get("voiceover") or "").lower():
+                raise ValueError(f"第 {index} 个镜头 benefit_claim.evidence 必须是口播原文")
         row["product_role"] = row.get("product_role") if row.get("product_role") in ("subject", "supporting", "none") else "none"
         row["hand_action"] = bool(row.get("hand_action"))
         row["speaker_on_screen"] = bool(row.get("speaker_on_screen"))
@@ -295,6 +305,7 @@ def build(project, batch, candidate_id, model_call=loop.gemini, reachable=tt.med
     if parsed is None:
         raise ValueError("镜头拆解输出不是 JSON 对象")
     parsed["cta_schema_version"] = 1
+    parsed["benefit_claim_schema_version"] = 1
     result = validate(parsed)
     if replication_notes:
         # 用户确认的复刻要点是拆解模型的正式输入，也必须进入下游 must_keep，

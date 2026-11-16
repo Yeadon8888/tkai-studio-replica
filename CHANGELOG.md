@@ -2,6 +2,32 @@
 
 版本规则见 `references/versioning.md`。
 
+## 0.10.0 — 2026-11-16
+
+### 新增
+- R13 / PR #16：H/M/L 神韵清单、分档通过线、R 还原度专家、成片实际音轨检查，以及出镜口播走 H3 原声的声音路线。
+- PR #17、#20–#22：流域中台制作执行机、完整流水线、节点数据约定 v1、租约过期续领、断线重连和本地状态恢复。
+- R14 / PR #18–#19：纯音乐曲库复用与 Suno 预算路线，以及人工修改意见驱动的脚本版本化重写循环。
+- R16 / PR #23–#24：字幕、屏幕文字、CTA、品名、口播、时长与节拍的形式不变量；付费前神韵预估；回复评论贴纸审核与就地编辑。
+- PR #25 TESPERT 20 秒试跑：对标音轨转写、目标时长压缩、结构化反向 CTA、角色设定表与设定图、产品细节裁图、安全区文字、末句保护和未知提交恢复。
+- R17：对标转写口播覆盖率、脚本 80% 下限和逐镜产品作用校验；新增 `code-format-speech-coverage` 与 `code-format-benefit-per-beat` 神韵项。
+
+### 变更
+- 默认文本/理解模型改为 `gemini-4-hydrogen`；长脚本独立默认 `MODEL_SCRIPT=gemini-3.8-flash-low`，避免 hydrogen 在 TESPERT 长脚本中将 8000/16000 token 全部用于推理。
+- 出镜角色（包含特殊角色）统一使用 H3 原声；只有画外音或不在画面中的特殊配音使用 TTS。
+- 所有对外 HTTP 打开操作统一经 `common.http_open`，强制使用 `HTTP_USER_AGENT`；文本账本在模型目录有文档单价时按实际 usage 计费，无依据仍为未知，并由 doctor 列出缺价模型。
+- `SKILL.md` 与 `references/` 对齐转写、形式不变量、神韵预估、角色设定、末句保护、目标时长、声音路线、命令参数和模型默认值。
+
+### 修复
+- 中台执行机不再因断线、租约过期或已完成的本地状态而误判失败；测试预算不再被本机 `.env` 污染。
+- 违反形式不变量的旧脚本由引擎进入可审计的系统重写；贴纸对象编辑后重新跑代码校验。
+- TESPERT 试跑修复目标时长、合成分辨率、FFmpeg 文字转义、角色连续、顶部文字、产品细节和末句硬切等流程卡点。
+- 评审 HTTP 复验已排除 GitHub 临时媒体地址为抽帧模式 403 的条件；请求 UA 现由统一入口保证。副本上的单次复验达到上游后返回 524，未重试。
+
+### 迁移
+- `.env` 新增中台执行机的 `PLATFORM_BASE_URL`、`PLATFORM_TOKEN_FILE`、`RUNNER_ID`；新增 `MODEL_ANCHOR`、`MODEL_AUDIO_CHECK`、`MODEL_TRANSCRIBE`、`MODEL_MUSIC`、`SUNO_MV`、`PROBE_MAX_TOKENS`、`AUDIO_ROUTE_DEFAULT`、`TTS_PRICE_CNY`、`MUSIC_PRICE_CNY`、`MUSIC_POLL_INTERVAL_SECONDS`、`MUSIC_MAX_POLLS` 和 `SCRIPT_FEEDBACK_MAX`。
+- `MODEL_TEXT` 默认从 `gemini-3.8-flash-low` 改为 `gemini-4-hydrogen`，`MODEL_VIDEO_READ_PROBE` 同步更新；`MODEL_SCRIPT` 默认改为 `gemini-3.8-flash-low`。旧配置可继续显式保留原值。
+
 ## 0.9.0 — 2026-11-14
 
 ### 新增

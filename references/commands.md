@@ -119,7 +119,7 @@ python3 loop.py board --project <运行目录>                   # 默认 <运�
 ## 高质量逐镜头复刻
 
 ```bash
-python3 shot_list.py --project <运行目录> --batch <调研批次> --id C023
+python3 shot_list.py --project <运行目录> --batch <调研批次> --id C023 [--target-duration 20]
 python3 format_invariants.py --project <运行目录>
 python3 script_writer.py --project <运行目录> --facts "16 parameters,125 strips"
 python3 essence.py --project <运行目录> --preview

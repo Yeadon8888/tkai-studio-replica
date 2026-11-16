@@ -27,9 +27,10 @@ import yaml  # noqa: E402
 
 import gate  # noqa: E402
 import essence  # noqa: E402
+import format_invariants  # noqa: E402
 import media_host  # noqa: E402
 import settings  # noqa: E402
-from common import _read, _write, parse_json, read_anchor, read_json  # noqa: E402
+from common import _read, _write, http_open, parse_json, read_anchor, read_json  # noqa: E402
 import loop  # noqa: E402  (提供 gemini()、_frames()、_data_uri())
 
 EXPERTS_PATH = os.path.join(KIT, "config", "experts.yaml")
@@ -489,7 +490,8 @@ def _reachable(url):
         if method == "GET":
             headers["Range"] = "bytes=0-0"
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=headers, method=method), timeout=20) as r:
+            with http_open(url, headers=headers, method=method, timeout=20,
+                           opener=urllib.request.urlopen) as r:
                 return r.status in (200, 206)
         except urllib.error.HTTPError as e:
             if method == "HEAD" and e.code in (403, 405):
@@ -620,7 +622,14 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
     if essence_data:
         brief = dict(brief, essence_items=[x for x in essence_data.get("items") or [] if x.get("judge") == "expert"])
         shots_data = read_json(project / "shots.json", {}) or {}
-        code_essence = essence.code_results(essence_data, shots_data, video, brief)
+        script_data = read_json(project / "script.json", {}) or {}
+        format_data = read_json(project / "format.json", {}) or format_invariants.derive(shots_data)
+        import script_writer
+        facts = script_writer.load_facts(project, ())
+        compose_data = read_json(project / "compose" / "compose.json", {}) or {}
+        code_essence = essence.code_results(essence_data, shots_data, video, brief,
+                                            script=script_data, format_data=format_data,
+                                            facts=facts, compose_data=compose_data)
     mode, video_url, upload_info = _video_source(project, take, video, brief)
     record["mode"] = mode
     if mode == "frames" and job.get("remote_url") and brief.get("segment_of"):

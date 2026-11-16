@@ -18,7 +18,7 @@ import models
 import products
 import review_panel
 import settings
-from common import read_json
+from common import http_open, read_json
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -140,8 +140,8 @@ def _remote_video(url):
     if not str(url or "").startswith(("http://", "https://")):
         return False
     try:
-        request = urllib.request.Request(url, headers={"Range": "bytes=0-0", "User-Agent": "StudioConsole/1"})
-        with urllib.request.urlopen(request, timeout=4) as response:
+        with http_open(url, headers={"Range": "bytes=0-0"}, timeout=4,
+                       opener=urllib.request.urlopen) as response:
             return response.status in (200, 206) and (
                 response.headers.get_content_type().startswith("video/") or response.status == 206)
     except (OSError, urllib.error.URLError, ValueError):

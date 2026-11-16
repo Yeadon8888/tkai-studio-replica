@@ -19,7 +19,7 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
-from common import _now, _read, _write  # noqa: E402
+from common import _now, _read, _write, http_open  # noqa: E402
 import ledger  # noqa: E402
 import settings  # noqa: E402
 import tt_research as tt  # noqa: E402
@@ -95,7 +95,7 @@ def _image_bytes(response, base, key):
     headers = {"User-Agent": settings.get("HTTP_USER_AGENT")}
     if url.startswith(base.rstrip("/") + "/"):
         headers["Authorization"] = f"Bearer {key}"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=300) as result:
+    with http_open(url, headers=headers, timeout=300, opener=urllib.request.urlopen) as result:
         return result.read()
 
 
@@ -111,7 +111,7 @@ def request_edit(product_reference, prompt, size):
         headers={"Authorization": f"Bearer {key}", "Content-Type": content_type,
                  "User-Agent": settings.get("HTTP_USER_AGENT")},
     )
-    with urllib.request.urlopen(req, timeout=300) as result:
+    with http_open(req, timeout=300, opener=urllib.request.urlopen) as result:
         response = json.loads(result.read().decode("utf-8"))
     return _image_bytes(response, base, key)
 
@@ -126,7 +126,7 @@ def request_generation(prompt, size):
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                  "User-Agent": settings.get("HTTP_USER_AGENT")},
     )
-    with urllib.request.urlopen(req, timeout=300) as result:
+    with http_open(req, timeout=300, opener=urllib.request.urlopen) as result:
         response = json.loads(result.read().decode("utf-8"))
     return _image_bytes(response, base, key)
 

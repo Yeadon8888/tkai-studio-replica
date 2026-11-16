@@ -615,8 +615,8 @@ def _generate_single(a):
             if not url:
                 sys.exit(f"完成但没有找到视频地址：{str(js)[:300]}")
             out = takes_dir / f"{tid}.mp4"
-            req = urllib.request.Request(url, headers={"User-Agent": "TokensFactory-Media/1.1"})
-            with urllib.request.urlopen(req, timeout=300) as r, out.open("wb") as f:
+            req = urllib.request.Request(url)
+            with common.http_open(req, timeout=300, opener=urllib.request.urlopen) as r, out.open("wb") as f:
                 f.write(r.read())
             job.update(status="saved", video=str(out), saved_at=_now(),
                        remote_url=url, remote_url_at=_now())

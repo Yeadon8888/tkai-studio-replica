@@ -54,7 +54,7 @@ python3 kit/doctor.py --probe video_read,gemini-4-hydrogen
 **换文本/理解模型（所有环节一起换）**
 ```
 MODEL_TEXT=<新模型名>
-MODEL_SCRIPT=                 # 留空沿用 MODEL_TEXT
+MODEL_SCRIPT=gemini-3.8-flash-low  # 长脚本独立默认；显式留空才沿用 MODEL_TEXT
 MODEL_TRANSCRIBE=gemini-3.8-flash  # 只读 16k mono MP3 对标音轨
 ```
 
@@ -62,7 +62,7 @@ MODEL_TRANSCRIBE=gemini-3.8-flash  # 只读 16k mono MP3 对标音轨
 ```
 MODEL_REVIEW=<新模型名>
 ```
-可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_SCRIPT`（逐镜头脚本、口播和字幕）、`MODEL_TRANSCRIBE`（对标纯音轨转写）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。除 `MODEL_TRANSCRIBE` 默认固定为 `gemini-3.8-flash` 外，留空就沿用 `MODEL_TEXT`。
+可单独设置的环节：`MODEL_VERIFY`（验证是否同款）、`MODEL_BREAKDOWN`（拆解）、`MODEL_DRAFT`（起草提示词）、`MODEL_SCRIPT`（逐镜头脚本、口播和字幕，默认 `gemini-3.8-flash-low`）、`MODEL_TRANSCRIBE`（对标纯音轨转写）、`MODEL_REVIEW`（专家审判）、`MODEL_REVISE`（按审判意见改提示词）。实验功能 `prompt_review.py` 使用 `MODEL_CRITIC`。除 `MODEL_SCRIPT` 和默认为 `gemini-3.8-flash` 的 `MODEL_TRANSCRIBE` 外，留空就沿用 `MODEL_TEXT`。
 
 **按用途选择视频模型**
 ```
@@ -84,7 +84,7 @@ VIDEO_ASPECT=9:16
 ```
 AUDIO_ROUTE_DEFAULT=auto  # auto | native | tts
 ```
-`auto` 下，`on_camera_speech` 走 H3 原声，`voiceover`、`special_voice` 走 TTS。
+`auto` 下，凡是 `speaker_on_screen: true` 的出镜台词（包含 `special_voice` 的特殊角色）都走 H3 原声；只有画外音或不在画面中的特殊配音走 TTS。
 `music_only` 固定走 `music`，`ambient` 固定走 `ambient`，不受旧的全局覆盖影响。详见
 [声音路线](audio.md)。
 

@@ -174,6 +174,10 @@ def format_errors(script, shots_data):
     actual_style = format_invariants.script_style(script)
     if actual_style != format_data.get("onscreen_style"):
         errors.append(f"屏幕文字形式应为 {format_data.get('onscreen_style')}，实际为 {actual_style}")
+    coverage = format_invariants.script_speech_coverage(script, shots_data.get("duration"))
+    minimum = float(format_data.get("speech_coverage") or 0) * .8
+    if coverage + 1e-9 < minimum:
+        errors.append(f"计划口播覆盖率 {coverage:.1%} 低于对标的 80% 下限 {minimum:.1%}")
     return errors
 
 
@@ -277,6 +281,13 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
         errors.append(f"非空口播段数应为 {expected_voice}，实际 {actual_voice}")
     if bool(actual_voice) != bool(format_data.get("voice")):
         errors.append("口播有无必须与对标 audio_mode 一致")
+    coverage = format_invariants.script_speech_coverage(script, shots_data.get("duration"))
+    minimum = float(format_data.get("speech_coverage") or 0) * .8
+    if coverage + 1e-9 < minimum:
+        errors.append(f"计划口播覆盖率 {coverage:.1%} 低于对标的 80% 下限 {minimum:.1%}")
+    benefit_ok, benefit_detail = format_invariants.benefit_match(shots_data, script, facts)
+    if not benefit_ok:
+        errors.append("对标含产品作用的每个镜头都必须有一句来自产品事实的作用：" + benefit_detail)
     target_captions = any(str(row.get("caption") or "").strip() for row in rows if isinstance(row, dict))
     if target_captions != bool(format_data.get("captions")):
         errors.append("字幕有无必须与对标一致")
@@ -404,6 +415,8 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词，并为每个生成单元结尾预留至少 {SPEECH_TAIL_SECONDS:g} 秒无台词余量。
+整体计划口播覆盖率必须至少是对标转写口播覆盖率的 80%，以每秒 2.6 词估算。
+镜头表 benefit_claim.present=true 的每个对应镜头，voiceover 必须有一句产品作用，且用词必须来自给定产品事实。
 镜头的 speaker_on_screen=true 且 voiceover 非空时，必须把完整 voiceover 原文同时写进 visual_prompt，格式为：<说话角色名或 The person> says in English, in a <语气> tone: '...'（漏写时代码会按 characters 第一个角色自动补上）；语气依据 rhythm，不得改台词。只有说话者不在画面中时才是画外音。
 speaker_on_screen=false 的 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。

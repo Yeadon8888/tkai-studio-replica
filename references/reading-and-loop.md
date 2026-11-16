@@ -20,7 +20,7 @@ Hypit 的参考视频读法（`~/.claude/skills/hypit/references/creation/refere
 ## 二、生成—审判—修订循环（`kit/refine_loop.py`）
 
 ```
-基础简报 ──► 预算检查 ──► 生成（MiniMax H3）──► 审判（机器检查 + 三位专家 + 闸门）
+基础简报 ──► 预算检查 ──► 生成（MiniMax H3）──► 审判（机器检查 + 四位专家 + 闸门）
                                                         │
                                   通过 ◄────────────────┤
                                                         ▼

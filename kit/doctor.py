@@ -49,6 +49,10 @@ def local_checks():
     try:
         catalog = models.load(force=True)
         rows.append(("block", "模型目录", bool(catalog), f"{len(catalog)} 个模型"))
+        missing_prices = [item["id"] for item in catalog
+                          if item.get("kind") == "text" and not item.get("prices")]
+        rows.append(("warn", "文本模型缺价", not missing_prices,
+                     "无" if not missing_prices else "、".join(missing_prices)))
     except Exception as exc:
         rows.append(("block", "模型目录", False, str(exc)))
     try:

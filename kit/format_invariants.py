@@ -20,6 +20,7 @@ DEFAULT_CTA_PATTERNS = (r"\bshop\b", r"\bbuy\b", r"\border\b", r"\blink\b",
                         r"\bget\s+yours\b", r"\bcheck\b.{0,30}\btoday\b",
                         r"\btap\b", r"\bclick\b")
 CTA_KINDS = {"direct", "reverse", "none"}
+WORDS_PER_SECOND = 2.6
 
 
 def config(path=None):
@@ -116,6 +117,80 @@ def script_style(script):
     return "text_overlay" if values else "none"
 
 
+def transcript_speech_coverage(shots):
+    """按转写时间码计算对标口播覆盖率；重叠分段只计一次。"""
+    segments = ((shots.get("transcript") or {}).get("segments") or [])
+    intervals = []
+    for row in segments:
+        try:
+            start, end = max(0.0, float(row["start"])), float(row["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start and str(row.get("text") or "").strip():
+            intervals.append((start, end))
+    if not intervals:
+        return 0.0
+    intervals.sort()
+    merged = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    total = float(shots.get("reference_duration") or max(end for _, end in merged) or shots.get("duration") or 0)
+    spoken = sum(max(0.0, min(end, total) - min(start, total)) for start, end in merged)
+    return round(min(1.0, spoken / total), 4) if total > 0 else 0.0
+
+
+def script_speech_coverage(script, duration):
+    """按每秒 2.6 词估算脚本口播时长占比。"""
+    words = sum(len(re.findall(r"\b[\w'-]+\b", str(row.get("voiceover") or "")))
+                for row in (script or {}).get("shots") or [] if isinstance(row, dict))
+    duration = float(duration or 0)
+    return round(min(1.0, words / WORDS_PER_SECOND / duration), 4) if duration > 0 else 0.0
+
+
+def benefit_requirements(shots):
+    return [str(row.get("id") or "") for row in shots.get("shots") or []
+            if isinstance(row.get("benefit_claim"), dict) and row["benefit_claim"].get("present") is True]
+
+
+def product_fact_keywords(facts):
+    """只从产品事实取可核对关键词，不使用对标台词。"""
+    values = list((facts or {}).get("confirmed_selling_points") or [])
+    state = (facts or {}).get("product_state") or {}
+    if not values:
+        identifiers = {"name", "brand", "model", "sku", "images", "references"}
+        if isinstance(state, dict):
+            values.extend(value for key, value in state.items() if str(key).lower() not in identifiers)
+        else:
+            values.append(state)
+    if not values:
+        values.append((facts or {}).get("product_anchor") or "")
+    blob = " ".join(json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+                    for value in values).lower()
+    stop = {"this", "that", "with", "from", "product", "the", "and", "for", "your", "bottle",
+            "kit", "strips", "exact"}
+    latin = [token for token in re.findall(r"[a-z0-9]+", blob) if len(token) >= 3 and token not in stop]
+    cjk = re.findall(r"[\u4e00-\u9fff]{2,}", blob)
+    return list(dict.fromkeys([*latin, *cjk]))
+
+
+def benefit_match(shots, script, facts):
+    required = benefit_requirements(shots)
+    if not required:
+        return True, "对标无逐镜产品作用台词"
+    keywords = product_fact_keywords(facts)
+    by_id = {str(row.get("id")): row for row in (script or {}).get("shots") or [] if isinstance(row, dict)}
+    missing = []
+    for shot_id in required:
+        voice = str((by_id.get(shot_id) or {}).get("voiceover") or "").lower()
+        if not voice or not any(keyword in voice for keyword in keywords):
+            missing.append(shot_id)
+    detail = f"对标要求 {required}；" + (f"未命中产品事实 {missing}" if missing else "各对应镜头均命中产品事实")
+    return not missing, detail
+
+
 def derive(shots, patterns=None):
     rows = [row for row in shots.get("shots") or [] if row.get("keep") in (None, "keep", "redo")]
     captions = any(str(row.get("caption") or "").strip() for row in rows)
@@ -138,6 +213,7 @@ def derive(shots, patterns=None):
                 if isinstance(row.get("cta"), dict) and (row.get("cta") or {}).get("evidence")]
     names = _reference_names(shots)
     mentions = count_names(reference_texts, names)
+    speech_coverage = transcript_speech_coverage(shots)
     parts = ["对标有连续字幕" if captions else "对标无字幕",
              "对标有人声" if voice else "对标无人声"]
     if style == "reply_sticker":
@@ -146,11 +222,14 @@ def derive(shots, patterns=None):
         parts.append("屏幕文字是普通文字叠加")
     else:
         parts.append("对标无屏幕文字")
-    parts += [f"CTA 类型为 {kind}" if cta else "无 CTA", f"品名出现 {mentions} 次"]
+    parts += [f"CTA 类型为 {kind}" if cta else "无 CTA", f"品名出现 {mentions} 次",
+              f"对标口播覆盖率 {speech_coverage:.1%}"]
     return {"version": 1, "captions": captions, "voice": voice, "onscreen_style": style,
             "onscreen": onscreen, "reply_sticker_shots": sticker_shots, "cta": cta,
             "cta_kind": kind, "cta_evidence": evidence,
             "cta_structured": cta_structured,
+            "speech_coverage": speech_coverage,
+            "benefit_claim_shots": benefit_requirements(shots),
             "product_mentions": mentions, "reference_product_names": names,
             "description": "；".join(parts)}
 
