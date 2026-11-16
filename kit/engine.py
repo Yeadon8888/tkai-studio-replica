@@ -37,7 +37,12 @@ def _latest_run(meta, requested=None):
 
 
 def _briefs(run_dir):
-    return sorted((run_dir / "briefs").glob("*.json")) if run_dir and (run_dir / "briefs").exists() else []
+    if not run_dir or not (run_dir / "briefs").exists():
+        return []
+    # 生成多段时 loop 会落盘 segment_of 子简报。它们供逐段评审使用，
+    # 不是新的制作范围；阶段推导和预算若再算一次会重复计费。
+    return [path for path in sorted((run_dir / "briefs").glob("*.json"))
+            if not (read_json(path, {}) or {}).get("segment_of")]
 
 
 def _estimate(brief_paths):
@@ -55,8 +60,10 @@ def _budget_details(brief_paths):
     """预算同时列出视频、定场图、TTS 与配乐；任一价格未知时总额保持未知。"""
     units = []
     needs_tts = False
+    needs_characters = False
     for path in brief_paths:
         brief = read_json(path, {}) or {}
+        needs_characters = needs_characters or bool(brief.get("characters"))
         segments = brief.get("segments") or []
         if segments:
             for index, segment in enumerate(segments, 1):
@@ -93,6 +100,10 @@ def _budget_details(brief_paths):
     units.append({"kind": "keyframe", "id": "scene", "model": settings.model("image"),
                   "duration": None, "unitPrice": settings.image_price(),
                   "totalCny": settings.image_price()})
+    if needs_characters:
+        units.append({"kind": "character_reference", "id": "characters", "model": settings.model("image"),
+                      "duration": None, "unitPrice": settings.image_price(),
+                      "totalCny": settings.image_price()})
     if needs_tts:
         units.append({"kind": "tts", "id": "voiceover", "model": settings.model("tts"),
                       "duration": None, "unitPrice": settings.tts_price(),
@@ -183,7 +194,9 @@ def _final_takes(run_dir):
     if not run_dir or not (run_dir / "takes").exists():
         return []
     segment_ids = set()
-    for path in _briefs(run_dir):
+    # 这里必须读全部简报：子简报的 segment_of 是识别分段成片的依据。
+    # 与预算/阶段推导只读顶层简报的 _briefs 用途不同。
+    for path in sorted((run_dir / "briefs").glob("*.json")):
         brief = read_json(path, {}) or {}
         if brief.get("segment_of"):
             segment_ids.add(path.stem)
@@ -350,6 +363,9 @@ def status(product, run=None):
         first = selected[0] if selected else {}
         command = [sys.executable, str(KIT / "shot_list.py"), "--project", str(run_dir),
                    "--batch", str(first.get("batch") or "<调研批次>"), "--id", str(first.get("id") or "<候选id>")]
+        project_meta = read_json(run_dir / "project.json", {}) or {}
+        if project_meta.get("target_duration") is not None:
+            command.extend(["--target-duration", str(project_meta["target_duration"])])
         result = {**base, "stage": "shots", "stage_label": STAGE_LABELS["shots"],
                   "action": {"type": "paid", "command": command, "summary": "调用模型拆出镜头表", "estimated_cny": None,
                              "approval": benchmark_cp["id"]}}
@@ -433,6 +449,14 @@ def status(product, run=None):
                   "action": {"type": "paid", "command": [sys.executable, str(KIT / "keyframe.py"), "scene",
                              "--project", str(run_dir), "--product-reference", refs[0]],
                              "summary": "生成共用定场图后停止", "estimated_cny": settings.image_price(),
+                             "approval": budget_cp["id"]}}
+        return _with_manual(result)
+    needs_characters = any(bool((read_json(path, {}) or {}).get("characters")) for path in briefs)
+    if not takes and needs_characters and not (run_dir / "characters.png").exists():
+        result = {**base, "stage": "keyframe", "stage_label": STAGE_LABELS["keyframe"],
+                  "action": {"type": "paid", "command": [sys.executable, str(KIT / "keyframe.py"), "characters",
+                             "--project", str(run_dir)],
+                             "summary": "生成全角色同框设定图后停止", "estimated_cny": settings.image_price(),
                              "approval": budget_cp["id"]}}
         return _with_manual(result)
     if not takes:

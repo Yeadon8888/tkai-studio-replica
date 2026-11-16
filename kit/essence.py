@@ -144,13 +144,13 @@ def _format_results(shots, script=None, plan=None, format_data=None, facts=None,
                             ((plan or {}).get("duration") or shots.get("duration") or 0))
     if script is None:
         actual_captions, actual_style = expected["captions"], expected["onscreen_style"]
-        actual_cta, actual_mentions, actual_voice = expected["cta"], expected["product_mentions"], expected["voice"]
+        actual_cta, actual_mentions, actual_voice = expected.get("cta_kind", "none"), expected["product_mentions"], expected["voice"]
     else:
         texts = list(format_invariants.script_texts(script))
         actual_captions = any(str(row.get("caption") or "").strip()
                               for row in script.get("shots") or [])
         actual_style = format_invariants.script_style(script)
-        actual_cta = any(format_invariants.has_cta(value) for value in texts)
+        actual_cta = format_invariants.cta_kind(script.get("shots") or [])
         names = format_invariants.script_product_names(facts or {})
         actual_mentions = format_invariants.count_names(texts, names)
         actual_voice = any(str(row.get("voiceover") or "").strip() for row in script.get("shots") or [])
@@ -165,8 +165,8 @@ def _format_results(shots, script=None, plan=None, format_data=None, facts=None,
                                  f"对标字幕={expected['captions']}；脚本字幕={actual_captions}"),
         "code-format-onscreen-style": (actual_style == expected["onscreen_style"],
                                         f"对标 {expected['onscreen_style']}；脚本 {actual_style}"),
-        "code-format-cta": (actual_cta == expected["cta"],
-                            f"对标 CTA={expected['cta']}；脚本 CTA={actual_cta}"),
+        "code-format-cta": (actual_cta == expected.get("cta_kind", "none"),
+                            f"对标 CTA={expected.get('cta_kind', 'none')}；脚本 CTA={actual_cta}"),
         "code-format-product-mentions": (actual_mentions <= expected["product_mentions"] + 1,
                                          f"对标 {expected['product_mentions']} 次；脚本 {actual_mentions} 次；上限 {expected['product_mentions'] + 1}"),
         "code-format-duration": (bool(ref_duration) and abs(target_duration - ref_duration) <= ref_duration * .15,

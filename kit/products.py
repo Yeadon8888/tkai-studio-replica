@@ -87,7 +87,7 @@ def register_run(pid, run_id):
     return meta
 
 
-def new_run(pid, name, date=None):
+def new_run(pid, name, date=None, target_duration=None):
     """在品目录下创建运行并按目录名登记，避免账本关联规则变化。"""
     load(pid)  # 先确认品存在
     name = name.strip()
@@ -99,11 +99,31 @@ def new_run(pid, name, date=None):
     if run_dir.exists():
         raise SystemExit(f"运行已存在：{run_dir}")
     run_dir.mkdir(parents=True)
-    write_json(run_dir / "project.json", {
+    if target_duration is not None and float(target_duration) <= 0:
+        raise SystemExit("目标时长必须大于 0 秒")
+    project = {
         "id": run_id, "product_id": pid, "name": name, "created": _now(),
-    })
+    }
+    if target_duration is not None:
+        project["target_duration"] = float(target_duration)
+    write_json(run_dir / "project.json", project)
     register_run(pid, run_id)
     return run_dir
+
+
+def set_run_target_duration(pid, run_id, seconds):
+    """为已建立的运行登记目标成片时长。"""
+    value = float(seconds)
+    if value <= 0:
+        raise SystemExit("目标时长必须大于 0 秒")
+    run_dir = product_dir(pid) / "runs" / run_id
+    project_path = run_dir / "project.json"
+    if not project_path.is_file():
+        raise SystemExit(f"运行不存在：{run_dir}")
+    project = read_json(project_path, {}) or {}
+    project["target_duration"] = value
+    write_json(project_path, project)
+    return value
 
 
 def approve_budget(pid, cny, note):
@@ -218,6 +238,11 @@ def main(argv=None):
     nr = sub.add_parser("new-run", help="在品目录下新建运行并自动登记")
     nr.add_argument("--product", required=True)
     nr.add_argument("--name", required=True)
+    nr.add_argument("--target-duration", type=float, help="目标成片时长（秒），可与对标时长不同")
+    td = sub.add_parser("set-target-duration", help="为已有运行登记目标成片时长")
+    td.add_argument("--product", required=True)
+    td.add_argument("--run", required=True)
+    td.add_argument("--seconds", type=float, required=True)
     sb = sub.add_parser("select", help="记录要复刻的对标（逗号分隔，可多条）")
     sb.add_argument("--product", required=True)
     sb.add_argument("--ids", required=True)
@@ -249,7 +274,11 @@ def main(argv=None):
         register_run(a.product, a.run)
         print("已登记运行", a.run)
     elif a.cmd == "new-run":
-        print("已创建并登记运行", new_run(a.product, a.name))
+        print("已创建并登记运行", new_run(a.product, a.name,
+                                              target_duration=a.target_duration))
+    elif a.cmd == "set-target-duration":
+        value = set_run_target_duration(a.product, a.run, a.seconds)
+        print(f"已登记运行 {a.run} 目标时长 {value:g} 秒")
     elif a.cmd == "queue":
         if a.set_stage:
             pid, st = a.set_stage

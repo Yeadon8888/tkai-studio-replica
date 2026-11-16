@@ -52,6 +52,23 @@ FACTS = {"product_state": {"name": "Exact Product"},
 
 
 class FormatDerivationTest(unittest.TestCase):
+    def test_structured_reverse_cta_takes_priority_over_word_list(self):
+        data = c023()
+        data["shots"][0]["voiceover"] = "Please don't test me."
+        data["shots"][0]["cta"] = {"present": True, "kind": "reverse",
+                                      "evidence": "Please don't test me."}
+        data["shots"][1]["cta"] = {"present": False, "kind": "none", "evidence": ""}
+        result = format_invariants.derive(data)
+        self.assertEqual(result["cta_kind"], "reverse")
+        self.assertTrue(result["cta_structured"])
+
+        script = valid_script()
+        script["shots"][0]["voiceover"] = "Buy it today"
+        script["shots"][0]["cta"] = {"present": True, "kind": "direct", "evidence": "Buy it today"}
+        script["shots"][1]["cta"] = {"present": False, "kind": "none", "evidence": ""}
+        errors = script_writer.validate(script, data, FACTS, [], result)
+        self.assertTrue(any("期望 reverse，实际 direct" in item for item in errors))
+
     def test_c023_fixture_has_no_captions_reply_sticker_and_no_cta(self):
         result = format_invariants.derive(c023())
         self.assertFalse(result["captions"])

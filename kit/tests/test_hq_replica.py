@@ -23,20 +23,40 @@ def shots():
             "summary": "结果悬念推动观看", "structure": [{"beat": "证明", "start": 0, "end": 12}], "shots": [
         {"id": "S01", "start": 0, "end": 4, "scale": "近景", "camera": "第一人称俯拍",
          "action": "拿起试纸瓶", "product_role": "subject", "hand_action": False,
+         "cta": {"present": False, "kind": "none", "evidence": ""},
          "onscreen_text": "old", "voiceover": "source line", "music_sfx": "beat", "rhythm": "开场",
          "hook_reason": "先给结果", "join": "cut", "keep": "keep", "redo_reason": "", "end_state": "手持瓶"},
         {"id": "S02", "start": 4, "end": 8, "scale": "特写", "camera": "固定俯拍",
          "action": "手把试纸浸入水中", "product_role": "supporting", "hand_action": True,
+         "cta": {"present": False, "kind": "none", "evidence": ""},
          "onscreen_text": "", "voiceover": "source line 2", "music_sfx": "dip", "rhythm": "动作",
          "hook_reason": "验证", "join": "continuous", "keep": "keep", "redo_reason": "", "end_state": "试纸在水中"},
         {"id": "S03", "start": 8, "end": 12, "scale": "特写", "camera": "轻微推进",
          "action": "把试纸放到色卡旁比对", "product_role": "subject", "hand_action": True,
+         "cta": {"present": False, "kind": "none", "evidence": ""},
          "onscreen_text": "", "voiceover": "source line 3", "music_sfx": "hit", "rhythm": "揭晓",
          "hook_reason": "结果", "join": "cut", "keep": "keep", "redo_reason": "", "end_state": "试纸在色卡旁"},
     ]}
 
 
 class ShotListValidation(unittest.TestCase):
+    def test_must_keep_is_normalized_for_plan_and_prompt_requests_it(self):
+        data = shots(); data["must_keep"] = ["strong X-ray cutaway and villain disintegration"]
+        result = shot_list.validate(data)
+        self.assertEqual(result["must_keep"], data["must_keep"])
+        self.assertIn('"must_keep"', shot_list.breakdown_prompt(20))
+
+    def test_sync_must_keep_migrates_existing_run_from_replication_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "shots.json").write_text(json.dumps({"shots": []}), encoding="utf-8")
+            (root / "project.json").write_text(json.dumps({"replication_notes": "strong X-ray disintegration"}),
+                                               encoding="utf-8")
+            values = shot_list.sync_must_keep(root)
+            saved = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+        self.assertEqual(values, ["strong X-ray disintegration"])
+        self.assertEqual(saved["must_keep"], values)
+
     def test_accepts_continuous_timeline(self):
         result = shot_list.validate(shots())
         self.assertEqual(result["shots"][-1]["end"], 12)
@@ -69,8 +89,85 @@ class ShotListValidation(unittest.TestCase):
             self.assertEqual((run / "benchmark" / "video.mp4").read_bytes(), b"video")
             self.assertEqual(result["benchmark_media"]["cover"]["status"], "copied")
 
+    def test_target_duration_is_sent_to_breakdown_and_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir()
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "url": "https://example.test/video", "duration": 40.0,
+            }]), encoding="utf-8")
+            prompts = []
+
+            def model_call(content, **_kwargs):
+                prompts.append(content[0]["text"])
+                value = shots(); value["duration"] = 20
+                value["structure"] = [{"beat": "证明", "start": 0, "end": 20}]
+                value["shots"] = [dict(value["shots"][0], start=0, end=20)]
+                return json.dumps(value)
+
+            result = shot_list.build(run, batch, "C023", model_call=model_call,
+                                     reachable=lambda _url: True, target_duration=20)
+        self.assertIn("精确 20 秒", prompts[0])
+        self.assertEqual((result["reference_duration"], result["target_duration"], result["duration"]),
+                         (40.0, 20.0, 20.0))
+
+    def test_local_video_is_deleted_and_logged_after_breakdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir(); video = root / "clip.mp4"; video.write_bytes(b"video")
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "local_file": str(video), "duration_s": 12,
+            }]), encoding="utf-8")
+            deleted, logged = [], []
+            result = shot_list.build(
+                run, batch, "C023", model_call=lambda *_a, **_k: json.dumps(shots()),
+                upload=lambda _path: {"url": "https://example.test/clip.mp4", "path": "clip.mp4"},
+                delete=lambda info: deleted.append(info["path"]) or True,
+                media_log=lambda _info, status: logged.append(status),
+            )
+        self.assertEqual(deleted, ["clip.mp4"])
+        self.assertTrue(logged[0]["deleted"])
+        self.assertEqual((result["source"], result["media_deleted"]),
+                         ("local_upload_whole_video", True))
+
+    def test_local_video_is_deleted_when_model_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); run, batch = root / "run", root / "batch"
+            run.mkdir(); batch.mkdir(); video = root / "clip.mp4"; video.write_bytes(b"video")
+            (batch / "candidates.json").write_text(json.dumps([{
+                "candidate_id": "C023", "local_file": str(video),
+            }]), encoding="utf-8")
+            deleted = []
+            with self.assertRaisesRegex(RuntimeError, "upstream"):
+                shot_list.build(
+                    run, batch, "C023", model_call=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("upstream")),
+                    upload=lambda _path: {"url": "https://example.test/clip.mp4", "path": "clip.mp4"},
+                    delete=lambda info: deleted.append(info["path"]) or True,
+                    media_log=lambda *_a: None,
+                )
+        self.assertEqual(deleted, ["clip.mp4"])
+
 
 class ShotPlanRoutes(unittest.TestCase):
+    def test_product_detail_crops_create_box_and_label_references(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "product.jpg"
+            Image.new("RGB", (1000, 1200), "white").save(source)
+            outputs = shot_plan.prepare_product_detail_refs([source], root / "details")
+            sizes = []
+            for path in outputs:
+                with Image.open(path) as image:
+                    sizes.append(image.size)
+        self.assertEqual([Path(path).name for path in outputs], ["box-front.jpg", "bottle-label.jpg"])
+        self.assertEqual(sizes, [(530, 1152), (350, 912)])
+
+    def test_fractional_units_preserve_total_target_duration(self):
+        self.assertEqual(shot_plan.allocate_request_durations([6.5, 6.5, 7.0], 20), [7, 6, 7])
+        with self.assertRaisesRegex(ValueError, "无法分配"):
+            shot_plan.allocate_request_durations([0.4, 0.4], 1)
+
     def test_groups_continuous_shots_and_uses_scene_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -85,10 +182,22 @@ class ShotPlanRoutes(unittest.TestCase):
                 for i in range(1, 4)]}
             plan = shot_plan.make_plan(shots(), script, refs, scene_path=scene, seed=9)
         self.assertEqual([s["shot_ids"] for s in plan["segments"]], [["S01", "S02"], ["S03"]])
+        self.assertEqual(plan["beats"], ["证明"])
         self.assertEqual(plan["segments"][0]["images"][0], str(scene.resolve()))
         for segment in plan["segments"]:
             self.assertIn("do not render captions", segment["prompt"].lower())
             self.assertEqual(segment["seed"], 9)
+
+    def test_plan_can_reference_scene_before_budgeted_image_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ref = root / "ref.jpg"; ref.write_bytes(b"image")
+            scene = root / "scene.png"
+            script = {"scene": "A clean table", "shots": [{
+                "id": f"S0{i}", "visual_prompt": "A hand moves the product", "voiceover": "Safe line",
+                "caption": "Safe line", "onscreen_copy": "", "end_state": "product held",
+            } for i in range(1, 4)]}
+            plan = shot_plan.make_plan(shots(), script, [ref], scene_path=scene, seed=9)
+        self.assertEqual(plan["segments"][0]["images"][0], str(scene.resolve()))
 
     def test_single_long_shot_is_evenly_split_under_fifteen(self):
         data = shots()
@@ -120,6 +229,28 @@ class ComposeTimeline(unittest.TestCase):
         self.assertIn("\n", rendered)
         self.assertTrue(all(len(line) <= 34 for line in rendered.splitlines()))
 
+    def test_text_overlay_is_static_wrapped_and_tail_is_not_hard_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); overlay = root / "copy.png"
+            with mock.patch.object(compose.subprocess, "run") as run:
+                compose.make_overlay(overlay, "PLEASE DO NOT BUY THIS PRODUCT", "copy")
+            rendered = overlay.with_suffix(".txt").read_text(encoding="utf-8")
+            self.assertIn("\n", rendered)
+            command = run.call_args.args[0]
+            self.assertIn("fix_bounds=true", command[command.index("-vf") + 1])
+            self.assertIn("x=max(w*0.08\\,min((w-text_w)/2\\,w*0.92-text_w))",
+                          command[command.index("-vf") + 1])
+
+            source, output = root / "raw.mp4", root / "safe.mp4"
+            source.write_bytes(b"raw")
+            with mock.patch.object(compose, "_probe_duration", return_value=21.2), \
+                 mock.patch.object(compose, "_last_nonsilent_end", return_value=20.8), \
+                 mock.patch.object(compose.subprocess, "run") as fit:
+                protected, info = compose.protect_native_tail(source, output, 20)
+            self.assertEqual(protected, output)
+            self.assertEqual(info["action"], "time_compress")
+            self.assertIn("atempo=1.06000000", " ".join(fit.call_args.args[0]))
+
     def test_composed_job_records_export_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -142,11 +273,12 @@ class ComposeTimeline(unittest.TestCase):
             with mock.patch.object(compose, "synthesize_speech", return_value=project / "speech.raw.wav"), \
                     mock.patch.object(compose, "fit_audio", return_value=project / "speech.wav"), \
                     mock.patch.object(compose, "make_silence", return_value=project / "silence.wav"), \
-                    mock.patch.object(compose, "compose_hypit", side_effect=fake_compose):
+                    mock.patch.object(compose, "compose_hypit", side_effect=fake_compose), \
+                    mock.patch.object(compose, "_probe_resolution", return_value="960p"):
                 compose.build(project, brief)
             job = json.loads((project / "jobs" / "take.json").read_text(encoding="utf-8"))
         self.assertTrue(job["composed"])
-        self.assertEqual(job["resolution"], "1080p")
+        self.assertEqual(job["resolution"], "960p")
 
 
 class ReplicationExpert(unittest.TestCase):

@@ -107,6 +107,39 @@ class CheckpointRules(StudioCase):
 
 
 class EngineRules(StudioCase):
+    def test_character_reference_is_budgeted_as_separate_image(self):
+        briefs = self.run / "briefs"; briefs.mkdir()
+        path = briefs / "hq.json"
+        path.write_text(json.dumps({"id": "hq", "characters": [{"name": "Lead"}], "segments": [
+            {"duration": 5, "video_route": "quality", "resolution": "960p", "estimated_cny": 1.15}
+        ]}), encoding="utf-8")
+        with mock.patch.object(settings, "image_price", return_value=0.5):
+            budget = engine._budget_details([path])
+        kinds = [row["kind"] for row in budget["units"]]
+        self.assertIn("character_reference", kinds)
+        character = next(row for row in budget["units"] if row["kind"] == "character_reference")
+        self.assertEqual(character["totalCny"], 0.5)
+
+    def test_engine_briefs_exclude_generated_segment_children(self):
+        briefs = self.run / "briefs"; briefs.mkdir()
+        parent = briefs / "hq.json"
+        child = briefs / "hq-s1.json"
+        parent.write_text(json.dumps({"id": "hq", "segments": [{"duration": 7}]}), encoding="utf-8")
+        child.write_text(json.dumps({"id": "hq-s1", "segment_of": "hq", "duration": 7}), encoding="utf-8")
+
+        self.assertEqual(engine._briefs(self.run), [parent])
+
+    def test_final_takes_use_child_segment_of_when_parent_segments_have_no_ids(self):
+        briefs = self.run / "briefs"; briefs.mkdir()
+        takes = self.run / "takes"; takes.mkdir()
+        (briefs / "hq.json").write_text(json.dumps({"id": "hq", "segments": [
+            {"shot_id": "S01", "duration": 7}]}), encoding="utf-8")
+        (briefs / "hq-s1.json").write_text(json.dumps({"id": "hq-s1", "segment_of": "hq"}), encoding="utf-8")
+        (takes / "hq.mp4").write_bytes(b"parent")
+        (takes / "hq-s1.mp4").write_bytes(b"segment")
+
+        self.assertEqual(engine._final_takes(self.run), ["hq"])
+
     def test_music_only_without_valid_music_returns_paid_script_rewrite(self):
         products.select_benchmarks("p1", ["C1"])
         first = engine.status("p1", self.run.name)

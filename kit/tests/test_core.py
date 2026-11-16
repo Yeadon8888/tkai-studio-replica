@@ -234,9 +234,10 @@ class ProductBudget(unittest.TestCase):
             products.QUEUE = products.PRODUCTS / "_queue.json"
             try:
                 products.create("p3", "测试品")
-                run = products.new_run("p3", "首批", date="20261113")
+                run = products.new_run("p3", "首批", date="20261113", target_duration=20)
                 self.assertEqual(run, products.PRODUCTS / "p3/runs/20261113-首批")
                 self.assertTrue((run / "project.json").is_file())
+                self.assertEqual(json.loads((run / "project.json").read_text())["target_duration"], 20.0)
                 self.assertEqual(products.load("p3")["runs"], ["20261113-首批"])
                 ledger_file = Path(tmp) / "costs.jsonl"
                 ledger_file.write_text(json.dumps({"project": run.name, "estimate_cny": 1.5}) + "\n",

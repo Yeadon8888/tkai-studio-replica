@@ -116,6 +116,21 @@ def request_edit(product_reference, prompt, size):
     return _image_bytes(response, base, key)
 
 
+def request_generation(prompt, size):
+    """调用 TokensFactory GPT Image 生成接口；用于不含产品的角色设定图。"""
+    base, key = tt.load_tf_env()
+    body = json.dumps({"model": settings.model("image"), "prompt": prompt,
+                       "size": size, "n": 1}).encode("utf-8")
+    req = urllib.request.Request(
+        base.rstrip("/") + "/v1/images/generations", data=body, method="POST",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                 "User-Agent": settings.get("HTTP_USER_AGENT")},
+    )
+    with urllib.request.urlopen(req, timeout=300) as result:
+        response = json.loads(result.read().decode("utf-8"))
+    return _image_bytes(response, base, key)
+
+
 def _dimensions(path):
     raw = subprocess.check_output([
         "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -226,6 +241,39 @@ def generate_scene(project, product_reference, edit=request_edit):
     return out.resolve()
 
 
+def generate_characters(project, generate=request_generation):
+    """按脚本模型给出的固定外观生成一张全角色设定图，不包含产品或标签。"""
+    project = Path(project)
+    script = _read(project / "script.json")
+    characters = script.get("characters") or []
+    if not characters:
+        raise ValueError("script.json 缺少 characters")
+    out = project / "characters.png"
+    if out.exists():
+        raise FileExistsError("characters.png 已存在，为避免重复付费不再提交")
+    descriptions = "\n".join(
+        f"- {row['name']}: {row['appearance']}" for row in characters
+        if isinstance(row, dict) and row.get("name") and row.get("appearance"))
+    if not descriptions:
+        raise ValueError("characters 没有可用的 name / appearance")
+    prompt = (
+        "Create one vertical character model sheet containing every listed character together, full body, "
+        "front three-quarter view, neutral pose, consistent scale, clean light-gray studio background. "
+        "Preserve every English appearance description exactly. No product, package, bottle, label, text, "
+        "letters, numbers, logo, caption or watermark.\nCharacters:\n" + descriptions
+    )
+    try:
+        out.write_bytes(generate(prompt, _request_size(settings.get("VIDEO_ASPECT"))))
+        normalize_aspect(out, settings.get("VIDEO_ASPECT"))
+    except Exception as exc:
+        out.unlink(missing_ok=True)
+        status = exc.code if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+        _append_image_ledger(project.name, "characters", status)
+        raise
+    _append_image_ledger(project.name, "characters", "ok")
+    return out.resolve()
+
+
 def generate_chain_last_frame(project, segment_id, first_frame, end_state, aspect_ratio=None, edit=request_edit):
     """以上一块最后一帧为基础编辑出本块终点画面；失败不重试。"""
     project = Path(project)
@@ -310,6 +358,19 @@ def build(project, brief_path, product_reference, edit=request_edit):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "characters":
+        parser = argparse.ArgumentParser(description="用 script.json 的角色设定生成全角色同框参考图")
+        parser.add_argument("characters")
+        parser.add_argument("--project", required=True)
+        args = parser.parse_args(argv)
+        try:
+            image = generate_characters(args.project)
+        except urllib.error.HTTPError as exc:
+            raise SystemExit(f"角色设定图生成失败 HTTP {exc.code}，不重试") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as exc:
+            raise SystemExit(f"角色设定图生成失败 {type(exc).__name__}，不重试：{str(exc)[:180]}") from None
+        print(f"角色设定图 → {image}")
+        return 0
     if argv and argv[0] == "scene":
         parser = argparse.ArgumentParser(description="用 script.json 场景和真实产品图生成共用定场图")
         parser.add_argument("scene")

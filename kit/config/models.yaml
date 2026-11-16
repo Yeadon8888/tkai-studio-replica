@@ -46,11 +46,11 @@ models:
   - <<: *text_unknown
     id: gemini-3.8-flash
     reads_video: false
-    reads_audio: null
+    reads_audio: true
     json_reliable: null
     policy: allowed
-    verified: {date: '2026-11-13', basis: 固定视频实测未摄取，token 判定失败}
-    notes: 会在没有读到视频时编造评审；禁止用于视频理解。声音能力未单独核验。
+    verified: {date: '2026-11-16', basis: Claude 实测 481 audio tokens，与 hydrogen 台词逐字一致}
+    notes: 会在没有读到视频时编造评审；禁止用于视频理解。已单独核验 input_audio 语音转写。
   - <<: *text_unknown
     id: gemini-3.8-flash-low
     reads_video: true

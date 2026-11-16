@@ -267,8 +267,8 @@ def aggregate_segment_reviews(project, take, segment_ids, brief):
         video = project / "takes" / f"{take}.mp4"
         source_brief = dict(brief, essence_items=[x for x in essence_data.get("items") or []
                                                  if x.get("judge") == "expert"])
-        reference_url = brief.get("replication_reference")
-        if not reference_url or not _reachable(reference_url):
+        reference_url, reference_upload = _reference_source(project, brief)
+        if not reference_url:
             decision = {"attempt": brief.get("attempt", 1), "decision": None,
                         "reason": "父成片神韵评审缺少可访问的对标视频，不得跳过第一指标"}
         else:
@@ -295,13 +295,8 @@ def aggregate_segment_reviews(project, take, segment_ids, brief):
                 decision = {"attempt": brief.get("attempt", 1), "decision": None,
                             "reason": f"父成片神韵评审未完成：{type(exc).__name__}"}
             finally:
-                if upload_info:
-                    try:
-                        deleted = media_host.delete(upload_info)
-                    except Exception:
-                        deleted = False
-                    media_host.log(upload_info, {"purpose": "parent_essence_review", "take": take,
-                                                 "deleted": deleted})
+                _cleanup_upload(upload_info, "parent_essence_review_output", take)
+                _cleanup_upload(reference_upload, "parent_essence_review_reference", take)
     parent_job_path = project / "jobs" / f"{take}.json"
     parent_job = _read(parent_job_path) if parent_job_path.exists() else {}
     record = {"take": take, "attempt": brief.get("attempt", 1), "mode": "segments", "machine": machine,
@@ -518,11 +513,37 @@ def _video_source(project, take, video, brief=None):
     return "video", info["url"], info
 
 
+def _reference_source(project, brief):
+    """评审时才上传持久本地对标；返回的 info 必须由调用方删除。"""
+    remote = brief.get("replication_reference")
+    if remote and _reachable(remote):
+        return remote, None
+    raw = brief.get("replication_reference_file") or "benchmark/video.mp4"
+    path = Path(raw).expanduser()
+    path = path if path.is_absolute() else Path(project) / path
+    if not path.is_file() or settings.get("MEDIA_UPLOAD") == "off":
+        return None, None
+    info = media_host.upload(path)
+    return info["url"], info
+
+
+def _cleanup_upload(info, purpose, take):
+    if not info:
+        return
+    try:
+        deleted, error = bool(media_host.delete(info)), ""
+    except Exception as exc:
+        deleted, error = False, type(exc).__name__
+    media_host.log(info, {"purpose": purpose, "take": take,
+                          "deleted": deleted, "delete_error": error})
+
+
 def _run_panel(cfg, project, take, brief, anchor, refs_p, video_url, frames, reference_url=None):
     """跑四位专家。返回 (judges, failed, not_ingested)。not_ingested 为 True 表示模型没读到视频，本轮作废。"""
     judges, failed = [], []
     for exp in cfg["experts"]:
-        if exp.get("id") == "R" and not brief.get("replication_reference"):
+        if exp.get("id") == "R" and not (brief.get("replication_reference") or
+                                          brief.get("replication_reference_file")):
             judges.append({"judge": {"id": "R", "name": exp.get("name"), "mode": "not_applicable"},
                            "scores": {"replication_fidelity": gate.NEUTRAL}, "checks": {},
                            "vetoes": [], "issues": [], "notes": "该简报不是对标复刻，维度不适用"})
@@ -607,9 +628,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
     frames = loop._frames(video, project / "reviews" / "frames" / output_take) if mode == "frames" else []
     cfg = load_experts(experts_path)
     refs_p = [Path(p) for p in refs]
-    reference_url = brief.get("replication_reference")
-    if reference_url and not _reachable(reference_url):
-        reference_url = None
+    reference_url, reference_upload = _reference_source(project, brief)
     voice_block = None
     try:
         if video_url and any(row.get("audio_route") == "music" for row in brief.get("segments") or []):
@@ -645,6 +664,7 @@ def review_take(project, take, refs, experts_path=EXPERTS_PATH, review_id=None):
                                          "deleted": deleted, "delete_error": error})
             if not deleted:
                 print(f"{take} 临时媒体删除未确认，请检查 media_log.jsonl")
+        _cleanup_upload(reference_upload, "review_reference", take)
     if voice_block:
         decision = {"attempt": attempt, "decision": "repair", "stage": "delivery", "retry_from": "compose",
                     "reason": "机器检查未通过：" + voice_block,

@@ -14,6 +14,7 @@ import doctor  # noqa: E402
 import essence  # noqa: E402
 import gate  # noqa: E402
 import loop  # noqa: E402
+import audio_transcript  # noqa: E402
 import review_panel  # noqa: E402
 import shot_list  # noqa: E402
 import shot_plan  # noqa: E402
@@ -88,7 +89,26 @@ class AudioRouteTest(unittest.TestCase):
         self.assertEqual(shot_plan.audio_route("on_camera_speech", "auto"), "native")
         self.assertEqual(shot_plan.audio_route("voiceover", "auto"), "tts")
 
-    def test_first_last_native_falls_back_to_tts(self):
+    def test_visible_special_voice_uses_native_and_embeds_dialogue(self):
+        import format_invariants
+        import script_writer
+        with tempfile.TemporaryDirectory() as tmp:
+            scene = Path(tmp) / "scene.png"; ref = Path(tmp) / "ref.jpg"; ref.write_bytes(b"x")
+            data = shots("special_voice")
+            script = {"scene": "kitchen", "shots": [
+                {"id": "S01", "visual_prompt": "The person says in English, in a playful tone: 'Try it now'",
+                 "voiceover": "Try it now", "caption": "Try it now", "onscreen_copy": "", "end_state": "up"},
+                {"id": "S02", "visual_prompt": "hand moves", "voiceover": "",
+                 "caption": "Result", "onscreen_copy": "", "end_state": "down"}]}
+            facts = {"product_anchor": "test strips", "confirmed_selling_points": []}
+            self.assertFalse(any("出镜口播" in error
+                                 for error in script_writer.validate(script, data, facts)))
+            prompt = script_writer._prompt(data, facts, [], format_invariants.derive(data))
+            self.assertIn("speaker_on_screen=false 的 voiceover、special_voice", prompt)
+            plan = shot_plan.make_plan(data, script, [ref], scene_path=scene, seed=1)
+        self.assertTrue(all(row["audio_route"] == "native" for row in plan["segments"]))
+
+    def test_on_camera_match_cut_uses_independent_native_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
             scene = Path(tmp) / "scene.png"; scene.write_bytes(b"x")
             ref = Path(tmp) / "ref.jpg"; ref.write_bytes(b"x")
@@ -100,9 +120,10 @@ class AudioRouteTest(unittest.TestCase):
                  "caption": "Result", "onscreen_copy": "", "end_state": "down"}]}
             plan = shot_plan.make_plan(data, script, [ref], scene_path=scene, seed=1,
                                        first_last_audio={"usable": False, "reason": "无历史证据"})
-        keyframe = next(x for x in plan["segments"] if x["video_route"] == "keyframe")
-        self.assertEqual(keyframe["audio_route"], "tts")
-        self.assertEqual(keyframe["audio_route_reason"], "无历史证据")
+        second = plan["segments"][1]
+        self.assertEqual((second["video_route"], second["audio_route"]), ("quality", "native"))
+        self.assertEqual(second["join_strategy"], "hard_cut_for_native_audio")
+        self.assertNotIn("first_frame", second)
 
     def test_native_compose_keeps_source_audio_and_ducks_music(self):
         rows = [{"start": 0, "end": 10, "caption": "hello", "onscreen_copy": ""}]
@@ -130,6 +151,63 @@ class AudioRouteTest(unittest.TestCase):
 
 
 class OutputLimitTest(unittest.TestCase):
+    def test_audio_requires_tokens_and_sends_user_agent_and_low_reasoning(self):
+        parts = [{"type": "input_audio", "input_audio": {"data": "eA==", "format": "mp3"}}]
+        bodies, headers = [], []
+
+        def response(_method, _url, request_headers, body, timeout):
+            headers.append(request_headers); bodies.append(body)
+            return {"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens_details": {"audio_tokens": 481}}}
+
+        with mock.patch.object(loop.settings, "model", return_value="gemini-3.8-flash"), \
+             mock.patch.object(loop.models, "get", return_value={}), \
+             mock.patch.object(loop.tt, "load_tf_env", return_value=("https://x", "secret")), \
+             mock.patch.object(loop.common, "http_json", side_effect=response), \
+             mock.patch.object(loop.ledger, "count_text_calls", return_value=0), \
+             mock.patch.object(loop.ledger, "append"):
+            self.assertEqual(loop.gemini(parts, "p", "r", role="transcribe",
+                                         reasoning_effort="low"), "ok")
+        self.assertTrue(headers[0]["User-Agent"])
+        self.assertEqual(bodies[0]["reasoning_effort"], "low")
+
+        with mock.patch.object(loop.settings, "model", return_value="gemini-3.8-flash"), \
+             mock.patch.object(loop.models, "get", return_value={}), \
+             mock.patch.object(loop.tt, "load_tf_env", return_value=("https://x", "secret")), \
+             mock.patch.object(loop.common, "http_json", return_value={
+                 "choices": [{"finish_reason": "stop", "message": {"content": "invented"}}], "usage": {}}), \
+             mock.patch.object(loop.ledger, "count_text_calls", return_value=0), \
+             mock.patch.object(loop.ledger, "append"):
+            with self.assertRaises(loop.AudioNotIngested):
+                loop.gemini(parts, "p", "r", role="transcribe")
+
+    def test_audio_counted_as_text_is_accepted_by_total_tokens(self):
+        parts = [{"type": "text", "text": "transcribe"}, {"type": "input_audio", "input_audio": {"data": "x"}}]
+        lumped = {"prompt_tokens": 1050, "prompt_tokens_details": {"text_tokens": 1050, "audio_tokens": 0}}
+        self.assertTrue(loop.audio_ingested(parts, lumped, audio_seconds=40))
+        text_only = {"prompt_tokens": 60, "prompt_tokens_details": {"text_tokens": 60, "audio_tokens": 0}}
+        self.assertFalse(loop.audio_ingested(parts, text_only, audio_seconds=40))
+        self.assertFalse(loop.audio_ingested(parts, lumped))
+
+    def test_transcript_uses_only_mono_mp3_and_keeps_original_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project, source = Path(tmp), Path(tmp) / "video.mp4"
+            source.write_bytes(b"video")
+
+            def extract(_video, output):
+                output = Path(output); output.parent.mkdir(parents=True); output.write_bytes(b"mp3")
+                return output
+
+            def model(parts, **kwargs):
+                self.assertEqual([part["type"] for part in parts], ["text", "input_audio"])
+                self.assertNotIn("reasoning_effort", kwargs)  # 带它时上游把音频计入 text_tokens
+                return json.dumps({"language": "en", "segments": [
+                    {"start": 1.25, "end": 2.75, "speaker": "villain", "text": "Don't test me"}]})
+
+            with mock.patch.object(audio_transcript, "extract_audio", side_effect=extract):
+                value = audio_transcript.transcribe(source, project, model_call=model)
+        self.assertEqual(value["timebase"], "reference_original_seconds")
+        self.assertEqual(value["segments"][0]["start"], 1.25)
     def test_loop_uses_minimum_and_retries_length_once(self):
         replies = [
             {"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning_content": "思考"}}], "usage": {}},
