@@ -125,6 +125,8 @@ class ScriptBlockingValidation(unittest.TestCase):
 
             result = script_writer.build(project, ["16 parameters"], model_call=fake, terms=[])
             self.assertEqual(len(calls), 2)
+            self.assertTrue(all(kwargs["max_tokens"] == 24000 for _parts, kwargs in calls))
+            self.assertTrue(all(kwargs["role"] == "script" for _parts, kwargs in calls))
             self.assertEqual(result["generation"]["rewrite_count"], 1)
             self.assertTrue(result["generation"]["validation"][-1]["ok"])
             self.assertTrue((project / "script.json").is_file())

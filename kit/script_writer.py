@@ -431,7 +431,7 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
     parsed = None
     for attempt in range(max_attempts):
         raw = model_call([{"type": "text", "text": prompt}], project=project.name,
-                         ref=f"script:{attempt + 1}", max_tokens=8000,
+                         ref=f"script:{attempt + 1}", max_tokens=24000,
                          temperature=TEMPERATURE, role="script")
         raw_outputs.append(raw)
         parsed = parse_json(raw, require=("scene", "shots"))
