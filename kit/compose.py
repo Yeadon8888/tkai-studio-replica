@@ -250,7 +250,7 @@ def make_overlay(output, text, kind="caption"):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
                     "color=c=black@0.0:s=1080x1920:d=0.04,format=rgba", "-vf",
                     f"drawtext=font='Arial':textfile='{text_path}':fontcolor=white:fontsize={size}:"
-                    f"x=max(w*0.08,min((w-text_w)/2,w*0.92-text_w)):y={y}:line_spacing=12:"
+                    f"x=max(w*0.08\\,min((w-text_w)/2\\,w*0.92-text_w)):y={y}:line_spacing=12:"
                     f"box={box}:boxcolor=black@0.62:boxborderw=22:fix_bounds=true",
                     "-frames:v", "1", str(output)], check=True)
     return output

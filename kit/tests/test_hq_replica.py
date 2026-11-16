@@ -238,6 +238,8 @@ class ComposeTimeline(unittest.TestCase):
             self.assertIn("\n", rendered)
             command = run.call_args.args[0]
             self.assertIn("fix_bounds=true", command[command.index("-vf") + 1])
+            self.assertIn("x=max(w*0.08\\,min((w-text_w)/2\\,w*0.92-text_w))",
+                          command[command.index("-vf") + 1])
 
             source, output = root / "raw.mp4", root / "safe.mp4"
             source.write_bytes(b"raw")
