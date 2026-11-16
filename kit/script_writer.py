@@ -82,6 +82,48 @@ def music_errors(script, shots_data):
     return _validate_music(script, shots_data) if shots_data.get("audio_mode") == "music_only" else []
 
 
+GENERIC_NAME_WORDS = {"do", "not", "don't", "dont", "buy", "this", "that", "the", "a", "an", "our", "your",
+                      "please", "it", "is", "all", "because", "of", "use", "test", "with", "and", "new"}
+
+
+def _speech_sentence(row, shot):
+    names = row.get("characters") if isinstance(row.get("characters"), list) else []
+    speaker = str(names[0]).strip() if names else "The person"
+    tone = str(row.get("tone") or shot.get("rhythm") or "natural").strip() or "natural"
+    return f"{speaker} says in English, in a {tone} tone: '{str(row.get('voiceover') or '').strip()}'"
+
+
+def normalize(script, shots_data):
+    """代码能确定的内容由代码补齐，不要求模型逐字照做：
+    出镜口播台词拼进 visual_prompt；角色 first_shot 由实际出场镜头推出。"""
+    if not isinstance(script, dict) or not isinstance(script.get("shots"), list):
+        return script
+    source = {str(x.get("id")): x for x in shots_data.get("shots") or []}
+    result = dict(script)
+    rows = []
+    for row in script["shots"]:
+        item = dict(row) if isinstance(row, dict) else row
+        if isinstance(item, dict):
+            shot = source.get(str(item.get("id")), {})
+            voice = str(item.get("voiceover") or "").strip()
+            visual = str(item.get("visual_prompt") or "").strip()
+            if shot.get("speaker_on_screen") and voice and voice.lower() not in visual.lower():
+                item["visual_prompt"] = f"{visual.rstrip('.')}. {_speech_sentence(item, shot)}".strip(". ")
+        rows.append(item)
+    result["shots"] = rows
+    if isinstance(script.get("characters"), list):
+        characters = []
+        for character in script["characters"]:
+            if isinstance(character, dict) and character.get("name"):
+                seen = [str(r.get("id")) for r in rows if isinstance(r, dict)
+                        and isinstance(r.get("characters"), list) and character["name"] in r["characters"]]
+                if seen:
+                    character = {**character, "first_shot": seen[0]}
+            characters.append(character)
+        result["characters"] = characters
+    return result
+
+
 def _append_no_voice(script, audio_mode):
     if audio_mode not in ("music_only", "ambient"):
         return script
@@ -211,8 +253,7 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
         elif VISUAL_TEXT.search(visual):
             errors.append(f"{sid} visual_prompt 要求渲染文字、logo 或字幕")
         if shot.get("speaker_on_screen") and voice:
-            required = f"The person says in English, in a "
-            if required.lower() not in visual.lower() or voice.lower() not in visual.lower():
+            if voice.lower() not in visual.lower() or " says in english" not in visual.lower():
                 errors.append(f"{sid} 出镜口播必须把完整台词和语气写进 visual_prompt")
         checked = " ".join(format_invariants.text_value(row.get(field))
                            for field in ("voiceover", "caption", "onscreen_copy"))
@@ -227,8 +268,10 @@ def validate(script, shots_data, facts, competitor_terms=(), format_data=None):
             errors.append(f"{sid} 产品称呼只能使用产品锚点名称或 the product")
         original_text = " ".join(format_invariants.text_value(row.get(field)) for field in FIELDS)
         for match in NAMED_PRODUCT.finditer(original_text):
-            phrase = match.group(0).lower()
-            if phrase != "the product" and phrase not in fact_blob:
+            name_tokens = [t for t in match.group(1).lower().split() if t not in GENERIC_NAME_WORDS]
+            if not name_tokens:
+                continue  # "DO NOT BUY The product" 之类：前面是普通词，不是产品名
+            if not all(t in fact_blob for t in name_tokens):
                 errors.append(f"{sid} 产品称呼不在产品锚点中：{match.group(0)}")
     if actual_voice != expected_voice:
         errors.append(f"非空口播段数应为 {expected_voice}，实际 {actual_voice}")
@@ -361,7 +404,7 @@ def _prompt(shots_data, facts, terms, format_data, errors=None, feedback=None, p
 共用场景 scene 用英文；每镜 visual_prompt 用英文且只写画面和动作，禁止要求画任何文字、数字、logo、字幕或水印。
 voiceover、caption、onscreen_copy 用英文；产品只称为产品锚点中的名字或 the product；不得出现竞品词。
 镜头表里原 voiceover 为空的段，你的 voiceover 也必须为空；非空段按每秒最多 2.6 个英文词，并为每个生成单元结尾预留至少 {SPEECH_TAIL_SECONDS:g} 秒无台词余量。
-镜头的 speaker_on_screen=true 且 voiceover 非空时，必须把完整 voiceover 原文同时写进 visual_prompt，格式必须是：The person says in English, in a <语气> tone: '...'；语气依据 rhythm，不得改台词。只有说话者不在画面中时才是画外音。
+镜头的 speaker_on_screen=true 且 voiceover 非空时，必须把完整 voiceover 原文同时写进 visual_prompt，格式为：<说话角色名或 The person> says in English, in a <语气> tone: '...'（漏写时代码会按 characters 第一个角色自动补上）；语气依据 rhythm，不得改台词。只有说话者不在画面中时才是画外音。
 speaker_on_screen=false 的 voiceover、special_voice 只写 voiceover 字段，不把台词写进画面提示词；music_only、ambient 不得编造台词。
 额外输出 music，只描述原创配乐风格：必须包含 mood、tempo_bpm、era_style、instruments、energy_curve；不得出现歌名、歌手名、in the style of 或 like <name>。
 所有数字和参数必须逐字存在于产品事实。end_state 要描述镜头结束一刻手、产品、道具的位置。
@@ -434,7 +477,7 @@ def build(project, extra_facts=(), model_call=loop.gemini, terms=None, feedback=
                          ref=f"script:{attempt + 1}", max_tokens=24000,
                          temperature=TEMPERATURE, role="script")
         raw_outputs.append(raw)
-        parsed = parse_json(raw, require=("scene", "shots"))
+        parsed = normalize(parse_json(raw, require=("scene", "shots")), shots_data)
         errors = validate(parsed, shots_data, facts, terms, format_data) if parsed is not None else ["输出不是含 scene、shots 的 JSON 对象"]
         checks.append({"attempt": attempt + 1, "ok": not errors, "errors": errors})
         if not errors:
