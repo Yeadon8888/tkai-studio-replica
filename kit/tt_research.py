@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ledger as studio_ledger  # noqa: E402  统一账本
-from common import read_json as _common_read_json, write_json as _common_write_json  # noqa: E402
+from common import http_open, read_json as _common_read_json, write_json as _common_write_json  # noqa: E402
 
 import settings  # noqa: E402  读 .env，并把密钥放进进程环境
 
@@ -121,7 +121,7 @@ class Client:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=90) as r:
+            with http_open(req, timeout=90, opener=urllib.request.urlopen) as r:
                 js = json.loads(r.read().decode("utf-8", "replace"))
                 status = r.status
         except urllib.error.HTTPError as e:
@@ -711,7 +711,7 @@ def media_reachable(url):
             headers["Range"] = "bytes=0-0"
         req = urllib.request.Request(url, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with http_open(req, timeout=20, opener=urllib.request.urlopen) as r:
                 return r.status in (200, 206)
         except urllib.error.HTTPError as e:
             if method == "HEAD" and e.code in (403, 405):
@@ -785,7 +785,7 @@ def cmd_verify(a):
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": TF_UA})
         stop = False
         try:
-            with urllib.request.urlopen(req, timeout=240) as r:
+            with http_open(req, timeout=240, opener=urllib.request.urlopen) as r:
                 js = json.loads(r.read().decode("utf-8"))
             text = (js["choices"][0]["message"]["content"] or "")
             obj = parse_json_obj(text)

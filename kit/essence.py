@@ -66,6 +66,10 @@ def build_items(shots, plan=None):
          "what": f"计划或成片时长与对标 {duration:g} 秒相差不超过 ±15%", "judge": "code"},
         {"id": "code-format-voice", "category": "sound", "label": "口播有无",
          "what": "口播有无与对标一致", "judge": "code"},
+        {"id": "code-format-speech-coverage", "category": "sound", "label": "口播覆盖率",
+         "what": f"计划口播覆盖率不低于对标 {format_data['speech_coverage']:.1%} 的 80%", "judge": "code"},
+        {"id": "code-format-benefit-per-beat", "category": "narrative_beats", "label": "逐节拍卖点",
+         "what": "对标含产品作用的每个镜头，脚本对应台词均含产品事实关键词", "judge": "code"},
         {"id": "code-format-narrative-beats", "category": "narrative_beats", "label": "节拍顺序",
          "what": beat_text, "judge": "code"},
         {"id": "expert-hook", "category": "hook",
@@ -131,6 +135,8 @@ FORMAT_LABELS = {
     "code-format-product-mentions": "品名次数",
     "code-format-duration": "计划时长",
     "code-format-voice": "口播有无",
+    "code-format-speech-coverage": "口播覆盖率",
+    "code-format-benefit-per-beat": "逐节拍卖点",
     "code-format-narrative-beats": "节拍顺序",
 }
 
@@ -158,6 +164,11 @@ def _format_results(shots, script=None, plan=None, format_data=None, facts=None,
         actual_captions = any(str(row.get("caption") or "").strip()
                               for row in compose_data["subtitles"] if isinstance(row, dict))
     ref_duration = float(shots.get("duration") or 0)
+    actual_coverage = (format_invariants.script_speech_coverage(script, target_duration)
+                       if script is not None else float(expected.get("speech_coverage") or 0))
+    coverage_min = float(expected.get("speech_coverage") or 0) * .8
+    benefit_ok, benefit_detail = format_invariants.benefit_match(shots, script, facts or {}) \
+        if script is not None else (True, "未提供脚本，沿用对标预期")
     beat_status = "pass" if source_beats and target_beats == source_beats else (
         "unclear" if not source_beats else "fail")
     values = {
@@ -173,6 +184,9 @@ def _format_results(shots, script=None, plan=None, format_data=None, facts=None,
                                  f"对标 {ref_duration:.3f}s；计划或成片 {target_duration:.3f}s"),
         "code-format-voice": (actual_voice == expected["voice"],
                               f"对标口播={expected['voice']}；脚本口播={actual_voice}"),
+        "code-format-speech-coverage": (actual_coverage + 1e-9 >= coverage_min,
+                                         f"对标 {expected.get('speech_coverage', 0):.1%}；脚本估算 {actual_coverage:.1%}；下限 {coverage_min:.1%}"),
+        "code-format-benefit-per-beat": (benefit_ok, benefit_detail),
     }
     rows = [{"id": item_id, "label": FORMAT_LABELS[item_id],
              "status": "pass" if passed else "fail", "detail": detail}

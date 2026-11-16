@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 import settings
+from common import http_open
 
 
 class PlatformError(RuntimeError):
@@ -120,7 +121,7 @@ class PlatformClient:
         last = None
         for attempt in range(2):
             try:
-                with self._open(request, timeout=self.timeout) as response:
+                with http_open(request, timeout=self.timeout, opener=self._open) as response:
                     raw = response.read()
                     if not expect_json:
                         return raw, dict(response.headers.items())

@@ -16,6 +16,7 @@ import gate  # noqa: E402
 import ledger  # noqa: E402
 import loop  # noqa: E402
 import review_panel  # noqa: E402
+import settings  # noqa: E402
 
 # 改动前 gate.py 中的硬编码字典（回归基准）。派生结果必须与它完全一致。
 LEGACY_DIM_CAUSES = {
@@ -69,6 +70,12 @@ class LedgerMoney(unittest.TestCase):
     def test_unknown_price_is_none_not_invented(self):
         self.assertIsNone(ledger.estimate_cny("gemini-3.8-flash", 1, "ok"))
 
+    def test_text_price_uses_actual_token_usage_when_documented(self):
+        item = {"prices": {"input_per_million_tokens": 2, "output_per_million_tokens": 8}}
+        usage = {"prompt_tokens": 1000, "completion_tokens": 500}
+        with mock.patch("models.get", return_value=item):
+            self.assertEqual(ledger.estimate_cny("documented-text", 1, "ok", kind="text", usage=usage), .006)
+
 
 class SharedHelpers(unittest.TestCase):
     def test_single_definition(self):
@@ -91,7 +98,22 @@ class SharedHelpers(unittest.TestCase):
                              {"ok": True})
         request = urlopen.call_args.args[0]
         self.assertEqual((request.method, request.data), ("POST", b'{"a": 1}'))
+        self.assertEqual(request.get_header("User-agent"), settings.get("HTTP_USER_AGENT"))
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 9)
+
+    def test_http_user_agent_is_forced_from_settings(self):
+        request = common.http_request("https://example.test", headers={"User-Agent": "Python-urllib/3"})
+        self.assertEqual(request.get_header("User-agent"), settings.get("HTTP_USER_AGENT"))
+
+    def test_all_python_http_opens_use_shared_helper(self):
+        offenders = []
+        for path in KIT.glob("*.py"):
+            if path.name != "common.py" and "urlopen(" in path.read_text(encoding="utf-8"):
+                offenders.append(path.name)
+        self.assertEqual(offenders, [])
+
+    def test_script_model_has_independent_default(self):
+        self.assertEqual(settings.DEFAULTS["MODEL_SCRIPT"], "gemini-3.8-flash-low")
 
 
 class ReviewRouting(unittest.TestCase):

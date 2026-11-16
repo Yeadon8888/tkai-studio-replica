@@ -51,6 +51,23 @@ FACTS = {"product_state": {"name": "Exact Product"},
          "product_anchor": "Exact Product bottle", "confirmed_selling_points": []}
 
 
+def spoken_benchmark():
+    return {"candidate_id": "C100", "tier": "H", "duration": 10, "reference_duration": 10,
+            "audio_mode": "voiceover", "structure": [{"beat": "证明", "start": 0, "end": 10}],
+            "transcript": {"segments": [{"start": 0, "end": 8, "text": "continuous speech"}]},
+            "shots": [{"id": "S01", "start": 0, "end": 10, "keep": "keep", "join": "cut",
+                       "scale": "特写", "camera": "平视", "action": "演示产品效果",
+                       "onscreen_text": "", "voiceover": "The product makes the tested water safer",
+                       "music_sfx": "", "benefit_claim": {"present": True,
+                       "evidence": "makes the tested water safer"}}]}
+
+
+def spoken_script(line):
+    return {"scene": "A clean testing table", "shots": [{"id": "S01",
+            "visual_prompt": "A close view of a water test demonstration", "voiceover": line,
+            "caption": "", "onscreen_copy": "", "end_state": "The result remains visible"}]}
+
+
 class FormatDerivationTest(unittest.TestCase):
     def test_structured_reverse_cta_takes_priority_over_word_list(self):
         data = c023()
@@ -118,6 +135,27 @@ class ScriptInvariantTest(unittest.TestCase):
         value = valid_script()
         value["shots"][0]["onscreen_copy"]["comment"] = "water safer than the ish we drink now"
         self.assertTrue(any("重合率超过 60%" in error for error in self.errors(value)))
+
+    def test_speech_coverage_and_benefit_per_beat_block_script(self):
+        shots = spoken_benchmark()
+        facts = {"product_state": {"name": "Water Test", "benefit": "removes chlorine"},
+                 "product_anchor": "Water Test", "confirmed_selling_points": ["removes chlorine"]}
+        good = spoken_script("This test reveals chlorine and helps families understand water quality clearly before every daily use at home today")
+        self.assertEqual(script_writer.validate(good, shots, facts), [])
+        sparse = spoken_script("This test reveals chlorine clearly")
+        self.assertTrue(any("口播覆盖率" in error for error in script_writer.validate(sparse, shots, facts)))
+        no_fact = spoken_script("This simple demonstration gives every family a clear useful answer before each daily decision at home")
+        self.assertTrue(any("来自产品事实" in error for error in script_writer.validate(no_fact, shots, facts)))
+
+    def test_transcript_coverage_is_derived_from_timecodes(self):
+        result = format_invariants.derive(spoken_benchmark())
+        self.assertEqual(result["speech_coverage"], .8)
+        self.assertEqual(result["benefit_claim_shots"], ["S01"])
+
+    def test_essence_contains_new_code_items(self):
+        ids = {item["id"] for item in essence.build_items(spoken_benchmark())["items"]}
+        self.assertIn("code-format-speech-coverage", ids)
+        self.assertIn("code-format-benefit-per-beat", ids)
 
 
 class ComposeInvariantTest(unittest.TestCase):

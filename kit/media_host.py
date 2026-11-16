@@ -22,6 +22,7 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 import settings  # noqa: E402
+from common import http_open  # noqa: E402
 
 
 def _gh(args, payload=None):
@@ -118,7 +119,8 @@ def _wait_until(url, want_ok, timeout=90):
     end = time.time() + timeout
     while time.time() < end:
         try:
-            urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20)
+            with http_open(url, method="HEAD", timeout=20, opener=urllib.request.urlopen):
+                pass
             if want_ok:
                 return True
         except urllib.error.HTTPError as e:

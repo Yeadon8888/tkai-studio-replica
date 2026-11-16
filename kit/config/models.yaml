@@ -77,7 +77,7 @@ models:
     min_output_tokens: 2000
     policy: allowed
     verified: {date: '2026-11-14', basis: 严格 JSON、固定视频画面问题及真实 C023 歌曲识别实测通过}
-    notes: 推理模型；小输出上限会只返回推理或被 length 截断。真实 C023 能识别无口播、音乐类型和具体歌曲。
+    notes: 推理模型；小输出上限会只返回推理或被 length 截断。TESPERT 长脚本试跑在 8000/16000 token 上限均全部用于推理，不作为 MODEL_SCRIPT 默认值。真实 C023 能识别无口播、音乐类型和具体歌曲。
   - <<: *text_unknown
     id: gemini-4-hydrogen-low
     min_output_tokens: 2000

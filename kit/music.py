@@ -13,7 +13,7 @@ from pathlib import Path
 KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
-from common import _now, http_json, read_json, write_json  # noqa: E402
+from common import _now, http_json, http_open, read_json, write_json  # noqa: E402
 import ledger  # noqa: E402
 import settings  # noqa: E402
 
@@ -103,8 +103,7 @@ class Client:
                           {"ids": [task_id]}, timeout=60)
 
     def download(self, url, output):
-        request = urllib.request.Request(url, headers={"User-Agent": settings.get("HTTP_USER_AGENT")})
-        with self._open(request, timeout=300) as response, Path(output).open("wb") as target:
+        with http_open(url, timeout=300, opener=self._open) as response, Path(output).open("wb") as target:
             while chunk := response.read(1024 * 1024):
                 target.write(chunk)
 

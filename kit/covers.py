@@ -24,6 +24,7 @@ KIT = Path(__file__).resolve().parent
 sys.path.insert(0, str(KIT))
 
 import settings  # noqa: E402
+from common import http_open  # noqa: E402
 
 MAX_BYTES = 400_000
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -43,7 +44,7 @@ def download(url, dest):
     """下载封面图片。成功返回 True。只接受图片，超过 MAX_BYTES 不保存。"""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.tiktok.com/"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with http_open(req, timeout=30, opener=urllib.request.urlopen) as r:
             ctype = r.headers.get("Content-Type", "")
             data = r.read(MAX_BYTES + 1)
     except (urllib.error.URLError, OSError):

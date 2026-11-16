@@ -25,6 +25,10 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 | `references/experts.md` | 审判标准、四位专家的分工、通过条件 |
 | `references/reading-and-loop.md` | 拆解的读法；生成—审判—修订循环 |
 | `references/local-video.md` | 用户给本地视频时怎么上传、拆解、删除 |
+| `references/audio.md` | 分清 H3 原声、画外 TTS、纯音乐和环境声路线 |
+| `references/long-take.md` | 逐镜头复刻、连续动作、角色连续性和末句保护 |
+| `references/keyframe.md` | 需要定场图、角色设定图或产品首帧时 |
+| `references/video-models.md` | 按用途选视频路线、核对能力与价格时 |
 | `references/pdca.md` | 每条视频、每个品的计划—执行—检查—改进 |
 | `references/budget-and-queue.md` | 预算、品目录、多品任务队列 |
 | `references/commands.md` | 每条命令的参数 |
@@ -55,7 +59,9 @@ compatibility: 需要 python3（≥3.9）、pyyaml、ffmpeg/ffprobe。使用前�
 
 ## 高质量逐镜头复刻
 
-`shot_list.py` 按真实切镜输出整体结构、声音类型、衔接和结束状态；`script_writer.py` 用配置模型生成并校验 `script.json`。出镜说话走 H3 原声，画外音和特殊角色音走 TTS，纯音乐先复用本地曲库、未命中再经预算批准生成 Suno 原创配乐，环境声保留 H3 自然音轨。`shot_plan.py` 按连续性合并并在 15 秒边界处分块；没有历史音轨证据的 first-last 原声接力块自动改走 TTS。`compose.py` 按单元保留原声、混入 TTS 或丢弃原声后铺纯音乐。具体命令见 `references/commands.md`，声音路线见 `references/audio.md`。
+`shot_list.py` 先转写对标音轨，再按真实切镜输出形式不变量、目标时长、反向 CTA、口播覆盖率和逐镜产品作用。`script_writer.py` 用 `MODEL_SCRIPT`（默认 `gemini-3.8-flash-low`）生成全部文案、角色设定表和镜头引用；能由代码确定的完整出镜台词、首次出场镜头等由代码补齐。脚本阶段必须通过神韵预估；口播按 2.6 词/秒校验并预留末句收尾，合成时遇末句仍有声优先整体轻微变速，不硬切。
+
+出镜角色（包含特殊角色）说话统一走 H3 原声；只有画外音或不在画面中的特殊配音才走 TTS。纯音乐先复用本地曲库，环境声保留 H3 自然音轨。`shot_plan.py` 按连续性分组，`compose.py` 按单元合成。细节见 `references/audio.md` 和 `references/long-take.md`。
 
 ## 流域中台执行机
 
